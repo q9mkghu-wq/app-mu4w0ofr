@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📸 포토 마크업 - 사진에 그림 그리기</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; }
+
+  header {
+    background: linear-gradient(135deg, #16213e, #0f3460);
+    padding: 12px 20px;
+    display: flex; align-items: center; justify-content: space-between;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+  }
+  header h1 { font-size: 1.3rem; color: #e94560; }
+  header p { font-size: 0.75rem; color: #aaa; }
+
+  .main-layout {
+    display: flex; height: calc(100vh - 60px);
+  }
+
+  /* 사이드바 */
+  .sidebar {
+    width: 280px; min-width: 280px;
+    background: #16213e;
+    display: flex; flex-direction: column;
+    border-right: 1px solid #0f3460;
+    overflow: hidden;
+  }
+  .sidebar-header {
+    padding: 14px; border-bottom: 1px solid #0f3460;
+    font-size: 0.85rem; color: #aaa;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .saved-list {
+    flex: 1; overflow-y: auto; padding: 8px;
+  }
+  .saved-list::-webkit-scrollbar { width: 4px; }
+  .saved-list::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 2px; }
+  .saved-item {
+    background: #0f3460;
+    border-radius: 8px; margin-bottom: 8px;
+    cursor: pointer; overflow: hidden;
+    border: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .saved-item:hover { border-color: #e94560; }
+  .saved-item img { width: 100%; height: 80px; object-fit: cover; display: block; }
+  .saved-item-info {
+    padding: 6px 8px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .saved-item-title { font-size: 0.75rem; color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+  .saved-item-date { font-size: 0.65rem; color: #666; }
+  .btn-del-item {
+    background: none; border: none; color: #e94560; cursor: pointer; font-size: 0.9rem; padding: 2px 4px;
+  }
+  .btn-del-item:hover { color: #ff6b6b; }
+  .empty-list { text-align: center; color: #555; padding: 30px 10px; font-size: 0.8rem; }
+
+  /* 캔버스 영역 */
+  .canvas-area {
+    flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* 툴바 */
+  .toolbar {
+    background: #16213e;
+    padding: 8px 12px;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    border-bottom: 1px solid #0f3460;
+  }
+  .tool-group {
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 8px; border-right: 1px solid #0f3460;
+  }
+  .tool-group:last-child { border-right: none; }
+  .tool-btn {
+    background: #0f3460; border: 2px solid transparent;
+    color: #eee; border-radius: 7px; padding: 6px 10px;
+    cursor: pointer; font-size: 1rem; transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .tool-btn:hover { background: #1a4a80; }
+  .tool-btn.active { border-color: #e94560; background: #2a1a2e; color: #e94560; }
+  .tool-btn.action { background: #e94560; color: #fff; border-color: #e94560; }
+  .tool-btn.action:hover { background: #c73652; }
+  .tool-btn.green { background: #1a6b3c; color: #fff; border-color: #1a6b3c; }
+  .tool-btn.green:hover { background: #155230; }
+
+  .color-picker-wrap { position: relative; }
+  .color-dot {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 2px solid #555; cursor: pointer;
+    transition: border-color 0.2s;
+  }
+  .color-dot:hover { border-color: #e94560; }
+  input[type="color"] { position: absolute; top: 0; left: 0; opacity: 0; width: 30px; height: 30px; cursor: pointer; }
+
+  .size-slider {
+    -webkit-appearance: none; width: 70px; height: 4px;
+    background: #0f3460; border-radius: 2px; outline: none; cursor: pointer;
+  }
+  .size-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px;
+    background: #e94560; border-radius: 50%;
+  }
+  .size-label { font-size: 0.7rem; color: #aaa; min-width: 20px; text-align: center; }
+
+  /* 이모티콘 팔레트 */
+  .emoji-palette {
+    display: none; position: absolute; z-index: 100;
+    background: #16213e; border: 1px solid #0f3460;
+    border-radius: 10px; padding: 10px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    display: none; flex-wrap: wrap; gap: 4px;
+    max-width: 260px;
+  }
+  .emoji-palette.show { display: flex; }
+  .emoji-item {
+    font-size: 1.4rem; cursor: pointer; padding: 4px;
+    border-radius: 4px; transition: background 0.15s;
+  }
+  .emoji-item:hover { background: #0f3460; }
+
+  /* 텍스트 입력 팝업 */
+  .text-popup {
+    display: none; position: absolute; z-index: 200;
+    background: #16213e; border: 1px solid #e94560;
+    border-radius: 10px; padding: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    min-width: 220px;
+  }
+  .text-popup.show { display: block; }
+  .text-popup input {
+    width: 100%; background: #0f3460; border: 1px solid #555;
+    color: #eee; border-radius: 6px; padding: 6px 8px;
+    font-size: 0.9rem; margin-bottom: 8px; outline: none;
+  }
+  .text-popup-btns { display: flex; gap: 6px; }
+  .text-popup-btns button {
+    flex: 1; padding: 6px; border: none; border-radius: 6px;
+    cursor: pointer; font-size: 0.8rem;
+  }
+  .btn-confirm { background: #e94560; color: #fff; }
+  .btn-cancel-text { background: #333; color: #eee; }
+
+  /* 캔버스 컨테이너 */
+  .canvas-container {
+    flex: 1; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    background: #0a0a1a;
+    position: relative;
+  }
+  #mainCanvas {
+    max-width: 100%; max-height: 100%;
+    cursor: crosshair;
+    display: block;
+    box-shadow: 0 0 30px rgba(0,0,0,0.5);
+  }
+  .canvas-placeholder {
+    text-align: center; color: #444;
+    pointer-events: none;
+  }
+  .canvas-placeholder .icon { font-size: 5rem; margin-bottom: 16px; }
+  .canvas-placeholder p { font-size: 1rem; margin-bottom: 8px; color: #555; }
+  .canvas-placeholder small { font-size: 0.8rem; color: #333; }
+
+  /* 저장 이름 입력 */
+  .save-bar {
+    background: #16213e; padding: 8px 12px;
+    display: flex; align-items: center; gap: 8px;
+    border-top: 1px solid #0f3460;
+  }
+  .save-bar input {
+    flex: 1; background: #0f3460; border: 1px solid #555;
+    color: #eee; border-radius: 6px; padding: 6px 10px;
+    font-size: 0.85rem; outline: none;
+  }
+  .save-bar input:focus { border-color: #e94560; }
+
+  /* 공유 모달 */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); z-index: 500;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: #16213e; border-radius: 14px; padding: 24px;
+    max-width: 420px; width: 90%;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    border: 1px solid #0f3460;
+  }
+  .modal h3 { color: #e94560; margin-bottom: 16px; }
+  .modal img { width: 100%; border-radius: 8px; margin-bottom: 14px; }
+  .modal-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .modal-btns button {
+    flex: 1; padding: 10px; border: none; border-radius: 8px;
+    cursor: pointer; font-size: 0.85rem; font-weight: bold;
+  }
+  .btn-download { background: #e94560; color: #fff; }
+  .btn-copy { background: #0f3460; color: #eee; border: 1px solid #555; }
+  .btn-close-modal { background: #333; color: #eee; }
+
+  .toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: #e94560; color: #fff;
+    padding: 10px 18px; border-radius: 8px;
+    font-size: 0.85rem; z-index: 9999;
+    transform: translateY(60px); opacity: 0;
+    transition: all 0.3s;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+
+  @media (max-width: 600px) {
+    .sidebar { display: none; }
+    .toolbar { gap: 4px; }
+    .tool-btn { padding: 5px 7px; font-size: 0.85rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>📸 포토 마크업</h1>
+    <p>사진 위에 선·이모티콘·텍스트를 추가하세요</p>
+  </div>
+</header>
+
+<div class="main-layout">
+  <!-- 사이드바: 저장된 이미지 목록 -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      💾 저장된 작업물
+    </div>
+    <div class="saved-list" id="savedList">
+      <div class="empty-list">저장된 항목 없음</div>
+    </div>
+  </div>
+
+  <!-- 메인 캔버스 영역 -->
+  <div class="canvas-area">
+    <!-- 툴바 -->
+    <div class="toolbar">
+      <!-- 이미지 불러오기 -->
+      <div class="tool-group">
+        <label class="tool-btn" title="사진 열기" style="cursor:pointer;">
+          📂 사진열기
+          <input type="file" id="fileInput" accept="image/*" style="display:none">
+        </label>
+      </div>
+
+      <!-- 도구 선택 -->
+      <div class="tool-group">
+        <button class="tool-btn active" id="btnPen" title="펜">✏️ 펜</button>
+        <button class="tool-btn" id="btnLine" title="직선">📏 선</button>
+        <button class="tool-btn" id="btnArrow" title="화살표">➡️ 화살</button>
+        <button class="tool-btn" id="btnRect" title="사각형">⬜ 사각</button>
+        <button class="tool-btn" id="btnCircle" title="원">⭕ 원</button>
+        <button class="tool-btn" id="btnText" title="텍스트">🔤 텍스트</button>
+        <button class="tool-btn" id="btnEmoji" title="이모티콘">😊 이모티콘</button>
+        <button class="tool-btn" id="btnEraser" title="지우개">🧹 지우개</button>
+      </div>
+
+      <!-- 색상 -->
+      <div class="tool-group">
+        <div class="color-picker-wrap" title="색상">
+          <div class="color-dot" id="colorDot" style="background:#e94560"></div>
+          <input type="color" id="colorPicker" value="#e94560">
+        </div>
+        <!-- 빠른 색상 -->
+        <div style="display:flex;gap:3px;flex-wrap:wrap;max-width:90px;">
+          <div class="color-dot" style="width:20px;height:20px;background:#ffffff" onclick="setColor('#ffffff')"></div>
+          <div class="color-dot" style="width:20px;height:20px;background:#000000" onclick="setColor('#000000')"></div>
+          <div class="color-dot" style="width:20px;height:20px;background:#e94560" onclick="setColor('#e94560')"></div>
+          <div class="color-dot" style="width:20px;height:20px;background:#00d4ff" onclick="setColor('#00d4ff')"></div>
+          <div class="color-dot" style="width:20px;height:20px;background:#ffcc00" onclick="setColor('#ffcc00')"></div>
+          <div class="color-dot" style="width:20px;height:20px;background:#44ff88" onclick="setColor('#44ff88')"></div>
+        </div>
+      </div>
+
+      <!-- 크기 -->
+      <div class="tool-group">
+        <span style="font-size:0.7rem;color:#aaa">크기</span>
+        <input type="range" class="size-slider" id="sizeSlider" min="1" max="30" value="4">
+        <span class="size-label" id="sizeLabel">4</span>
+      </div>
+
+      <!-- 액션 -->
+      <div class="tool-group">
+        <button class="tool-btn" id="btnUndo" title="실행취소">↩️ 취소</button>
+        <button class="tool-btn" id="btnClear" title="전체지우기" style="color:#e94560">🗑️ 초기화</button>
+        <button class="tool-btn green" id="btnSave" title="저장">💾 저장</button>
+        <button class="tool-btn action" id="btnShare" title="공유">📤 공유</button>
+      </div>
+    </div>
+
+    <!-- 이모티콘 팔레트 (절대 위치) -->
+    <div class="emoji-palette" id="emojiPalette">
+      <!-- 이모티콘들 -->
+    </div>
+
+    <!-- 텍스트 팝업 -->
+    <div class="text-popup" id="textPopup">
+      <input type="text" id="textInput" placeholder="텍스트를 입력하세요..." maxlength="50">
+      <div class="text-popup-btns">
+        <button class="btn-confirm" id="btnTextConfirm">추가</button>
+        <button class="btn-cancel-text" id="btnTextCancel">취소</button>
+      </div>
+    </div>
+
+    <!-- 캔버스 -->
+    <div class="canvas-container" id="canvasContainer">
+      <canvas id="mainCanvas" style="display:none"></canvas>
+      <div class="canvas-placeholder" id="placeholder">
+        <div class="icon">🖼️</div>
+        <p>사진을 불러오거나 드래그하여 시작하세요</p>
+        <small>📂 사진열기 버튼을 누르거나<br>여기에 이미지를 드롭하세요</small>
+      </div>
+    </div>
+
+    <!-- 저장 바 -->
+    <div class="save-bar">
+      <span style="font-size:0.8rem;color:#aaa;white-space:nowrap">작업명:</span>
+      <input type="text" id="saveName" placeholder="저장할 이름을 입력하세요..." value="작업물">
+      <span id="statusMsg" style="font-size:0.75rem;color:#555;white-space:nowrap">준비</span>
+    </div>
+  </div>
+</div>
+
+<!-- 공유 모달 -->
+<div class="modal-overlay" id="shareModal">
+  <div class="modal">
+    <h3>📤 이미지 공유</h3>
+    <img id="sharePreview" src="" alt="미리보기">
+    <div class="modal-btns">
+      <button class="btn-download" id="btnDownload">⬇️ 다운로드</button>
+      <button class="btn-copy" id="btnCopyImg">📋 클립보드 복사</button>
+      <button class="btn-close-modal" id="btnCloseModal">✖ 닫기</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// Firebase 초기화
+const firebaseConfig = {"apiKey":"AIzaSyAA9XxN-Pw0vbLT0f8-mI2bV0FgEx18iIU","authDomain":"appbuilder-4e83c.firebaseapp.com","projectId":"appbuilder-4e83c","storageBucket":"appbuilder-4e83c.firebasestorage.app","messagingSenderId":"1038242551917","appId":"1:1038242551917:web:4d59995638762401dd0764"};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// 이모티콘 목록
+const EMOJIS = [
+  '👆','👇','👈','👉','⭐','❗','❓','✅','❌','🔴','🟡','🟢','🔵',
+  '🔺','🔻','💡','🔍','📌','📍','⚠️','🚧','💬','💭','🗯️',
+  '😊','😢','😡','😮','👍','👎','🙏','💪','🎯','🏆','✨','🔥',
+  '📷','🖊️','📋','🔧','⚙️','🔨','📦','🚀','💻','📱','🖥️'
+];
+
+// 상태
+let currentTool = 'pen';
+let currentColor = '#e94560';
+let currentSize = 4;
+let isDrawing = false;
+let startX = 0, startY = 0;
+let history = [];
+let baseImage = null;
+let pendingTextPos = null;
+let pendingEmojiPos = null;
+let fontSizeForText = 24;
+
+const canvas = document.getElementById('mainCanvas');
+const ctx = canvas.getContext('2d');
+const placeholder = document.getElementById('placeholder');
+const canvasContainer = document.getElementById('canvasContainer');
+
+// 이모티콘 팔레트 채우기
+const emojiPalette = document.getElementById('emojiPalette');
+EMOJIS.forEach(em => {
+  const span = document.createElement('span');
+  span.className = 'emoji-item';
+  span.textContent = em;
+  span.addEventListener('click', () => {
+    selectEmoji(em);
+  });
+  emojiPalette.appendChild(span);
+});
+
+// 색상 설정
+function setColor(c) {
+  currentColor = c;
+  document.getElementById('colorDot').style.background = c;
+  document.getElementById('colorPicker').value = c;
+}
+
+document.getElementById('colorPicker').addEventListener('input', e => {
+  setColor(e.target.value);
+});
+
+// 크기 슬라이더
+document.getElementById('sizeSlider').addEventListener('input', e => {
+  currentSize = parseInt(e.target.value);
+  document.getElementById('sizeLabel').textContent = currentSize;
+  fontSizeForText = currentSize * 5 + 14;
+});
+
+// 도구 선택
+const toolBtns = {
+  pen: document.getElementById('btnPen'),
+  line: document.getElementById('btnLine'),
+  arrow: document.getElementById('btnArrow'),
+  rect: document.getElementById('btnRect'),
+  circle: document.getElementById('btnCircle'),
+  text: document.getElementById('btnText'),
+  emoji: document.getElementById('btnEmoji'),
+  eraser: document.getElementById('btnEraser')
+};
+
+function selectTool(tool) {
+  currentTool = tool;
+  Object.keys(toolBtns).forEach(k => toolBtns[k].classList.remove('active'));
+  toolBtns[tool].classList.add('active');
+  canvas.style.cursor = tool === 'eraser' ? 'cell' : (tool === 'text' || tool === 'emoji') ? 'pointer' : 'crosshair';
+  emojiPalette.classList.remove('show');
+}
+
+Object.keys(toolBtns).forEach(k => {
+  toolBtns[k].addEventListener('click', () => {
+    if (k === 'emoji') {
+      if (emojiPalette.classList.contains('show')) {
+        emojiPalette.classList.remove('show');
+        selectTool('pen');
+      } else {
+        const rect = toolBtns[k].getBoundingClientRect();
+        const containerRect = canvasContainer.getBoundingClientRect();
+        emojiPalette.style.top = (rect.bottom - containerRect.top + canvasContainer.offsetTop + 60) + 'px';
+        emojiPalette.style.left = (rect.left) + 'px';
+        emojiPalette.style.position = 'fixed';
+        emojiPalette.style.top = (rect.bottom + 4) + 'px';
+        emojiPalette.classList.add('show');
+        currentTool = 'emoji';
+        Object.keys(toolBtns).forEach(t => toolBtns[t].classList.remove('active'));
+        toolBtns['emoji'].classList.add('active');
+        canvas.style.cursor = 'pointer';
+      }
+    } else {
+      emojiPalette.classList.remove('show');
+      selectTool(k);
+    }
+  });
+});
+
+let selectedEmoji = '😊';
+function selectEmoji(em) {
+  selectedEmoji = em;
+  emojiPalette.classList.remove('show');
+  setStatus('캔버스를 클릭하면 이모티콘이 추가됩니다');
+}
+
+// 실행 취소
+document.getElementById('btnUndo').addEventListener('click', undo);
+function undo() {
+  if (history.length === 0) return;
+  history.pop();
+  if (history.length === 0) {
+    if (baseImage) drawBase();
+    else ctx.clearRect(0, 0, canvas.width, canvas.height);
+  } else {
+    const img = new Image();
+    img.onload = () => ctx.drawImage(img, 0, 0);
+    img.src = history[history.length - 1];
+  }
+}
+
+function saveHistory() {
+  history.push(canvas.toDataURL());
+  if (history.length > 30) history.shift();
+}
+
+// 전체 초기화
+document.getElementById('btnClear').addEventListener('click', () => {
+  if (!baseImage) return;
+  saveHistory();
+  drawBase();
+  setStatus('초기화됨');
+});
+
+// 이미지 불러오기
+document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) loadImageFile(file);
+  e.target.value = '';
+});
+
+function loadImageFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => loadImageSrc(e.target.result);
+  reader.readAsDataURL(file);
+}
+
+function loadImageSrc(src) {
+  const img = new Image();
+  img.onload = () => {
+    const container = canvasContainer;
+    const maxW = container.clientWidth - 20;
+    const maxH = container.clientHeight - 20;
+    let w = img.width, h = img.height;
+    const ratio = Math.min(maxW / w, maxH / h, 1);
+    w = Math.round(w * ratio);
+    h = Math.round(h * ratio);
+    canvas.width = w;
+    canvas.height = h;
+    baseImage = img;
+    history = [];
+    drawBase();
+    canvas.style.display = 'block';
+    placeholder.style.display = 'none';
+    setStatus('사진 로드 완료 - 그리기 시작!');
+  };
+  img.src = src;
+}
+
+function drawBase() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (baseImage) ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+}
+
+// 드래그 앤 드롭
+canvasContainer.addEventListener('dragover', e => { e.preventDefault(); });
+canvasContainer.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) loadImageFile(file);
+});
+
+// 캔버스 좌표 변환
+function getPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const touch = e.touches ? e.touches[0] : e;
+  return {
+    x: (touch.clientX - rect.left) * (canvas.width / rect.width),
+    y: (touch.clientY - rect.top) * (canvas.height / rect.height)
+  };
+}
+
+// 그리기 시작
+canvas.addEventListener('mousedown', onDown);
+canvas.addEventListener('touchstart', e => { e.preventDefault(); onDown(e); }, { passive: false });
+
+canvas.addEventListener('mousemove', onMove);
+canvas.addEventListener('touchmove', e => { e.preventDefault(); onMove(e); }, { passive: false });
+
+canvas.addEventListener('mouseup', onUp);
+canvas.addEventListener('touchend', e => { e.preventDefault(); onUp(e); }, { passive: false });
+
+function onDown(e) {
+  if (!baseImage) return;
+  const pos = getPos(e);
+  startX = pos.x; startY = pos.y;
+
+  if (currentTool === 'text') {
+    pendingTextPos = pos;
+    showTextPopup(e);
+    return;
+  }
+  if (currentTool === 'emoji') {
+    saveHistory();
+    drawEmoji(selectedEmoji, pos.x, pos.y);
+    return;
+  }
+
+  isDrawing = true;
+  saveHistory();
+
+  if (currentTool === 'pen' || currentTool === 'eraser') {
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+    ctx.lineWidth = currentTool === 'eraser' ? currentSize * 3 : currentSize;
+    ctx.strokeStyle = currentTool === 'eraser' ? null : currentColor;
+    ctx.globalCompositeOperation = currentTool === 'eraser' ? 'destination-out' : 'source-over';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  }
+}
+
+let snapshotBeforeShape = null;
+function onMove(e) {
+  if (!isDrawing) return;
+  const pos = getPos(e);
+
+  if (currentTool === 'pen' || currentTool === 'eraser') {
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    return;
+  }
+
+  // 도형: 스냅샷 복원 후 재그리기
+  if (!snapshotBeforeShape) {
+    snapshotBeforeShape = history[history.length - 1];
+  }
+  if (snapshotBeforeShape) {
+    const img2 = new Image();
+    img2.src = snapshotBeforeShape;
+    ctx.drawImage(img2, 0, 0);
+  }
+  drawShape(currentTool, startX, startY, pos.x, pos.y);
+}
+
+function onUp(e) {
+  if (!isDrawing) return;
+  isDrawing = false;
+  snapshotBeforeShape = null;
+  ctx.globalCompositeOperation = 'source-over';
+  const pos = getPos(e.changedTouches ? { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY } : e);
+  if (currentTool !== 'pen' && currentTool !== 'eraser') {
+    drawShape(currentTool, startX, startY, pos.x, pos.y);
+  }
+}
+
+function drawShape(tool, x1, y1, x2, y2) {
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = currentColor;
+  ctx.lineWidth = currentSize;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.fillStyle = currentColor;
+
+  if (tool === 'line') {
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  } else if (tool === 'arrow') {
+    drawArrow(x1, y1, x2, y2);
+  } else if (tool === 'rect') {
+    ctx.beginPath();
+    ctx.rect(x1, y1, x2 - x1, y2 - y1);
+    ctx.stroke();
+  } else if (tool === 'circle') {
+    const rx = (x2 - x1) / 2, ry = (y2 - y1) / 2;
+    ctx.beginPath();
+    ctx.ellipse(x1 + rx, y1 + ry, Math.abs(rx), Math.abs(ry), 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+function drawArrow(x1, y1, x2, y2) {
+  const headlen = Math.max(15, currentSize * 3);
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - headlen * Math.cos(angle - Math.PI / 6), y2 - headlen * Math.sin(angle - Math.PI / 6));
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - headlen * Math.cos(angle + Math.PI / 6), y2 - headlen * Math.sin(angle + Math.PI / 6));
+  ctx.stroke();
+}
+
+function drawEmoji(emoji, x, y) {
+  const size = Math.max(24, currentSize * 8);
+  ctx.font = `${size}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillText(emoji, x, y);
+}
+
+// 텍스트 팝업
+const textPopup = document.getElementById('textPopup');
+const textInput = document.getElementById('textInput');
+
+function showTextPopup(e) {
+  const containerRect = canvasContainer.getBoundingClientRect();
+  const touch = e.touches ? e.touches[0] : e;
+  let px = touch.clientX - containerRect.left + 10;
+  let py = touch.clientY - containerRect.top + 10;
+  if (px + 240 > containerRect.width) px = containerRect.width - 250;
+  if (py + 100 > containerRect.height) py = containerRect.height - 110;
+  textPopup.style.left = px + 'px';
+  textPopup.style.top = py + 'px';
+  textPopup.style.position = 'absolute';
+  textPopup.classList.add('show');
+  textInput.value = '';
+  textInput.focus();
+}
+
+document.getElementById('btnTextConfirm').addEventListener('click', confirmText);
+document.getElementById('btnTextCancel').addEventListener('click', () => {
+  textPopup.classList.remove('show');
+  pendingTextPos = null;
+});
+textInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmText(); });
+
+function confirmText() {
+  const txt = textInput.value.trim();
+  if (!txt || !pendingTextPos) { textPopup.classList.remove('show'); return; }
+  saveHistory();
+  const size = fontSizeForText;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = currentColor;
+  ctx.font = `bold ${size}px 'Segoe UI', sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  // 텍스트 배경
+  const metrics = ctx.measureText(txt);
+  const tw = metrics.width + 10;
+  const th = size + 8;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(pendingTextPos.x - 4, pendingTextPos.y - 2, tw, th);
+  ctx.fillStyle = currentColor;
+  ctx.fillText(txt, pendingTextPos.x, pendingTextPos.y);
+  textPopup.classList.remove('show');
+  pendingTextPos = null;
+  setStatus('텍스트 추가됨');
+}
+
+// 저장
+document.getElementById('btnSave').addEventListener('click', saveToFirestore);
+
+function saveToFirestore() {
+  if (!baseImage) { showToast('먼저 사진을 불러오세요!'); return; }
+  const name = document.getElementById('saveName').value.trim() || '작업물';
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+  setStatus('저장 중...');
+  db.collection("apps/app-mu4w0ofr/items").add({
+    name: name,
+    imageData: dataUrl,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(() => {
+    showToast('✅ 저장 완료!');
+    setStatus('저장됨');
+  }).catch(err => {
+    console.error(err);
+    showToast('❌ 저장 실패: ' + err.message);
+    setStatus('저장 실패');
+  });
+}
+
+// 저장 목록 불러오기
+db.collection("apps/app-mu4w0ofr/items").orderBy('createdAt', 'desc').limit(20).onSnapshot(snapshot => {
+  const list = document.getElementById('savedList');
+  if (snapshot.empty) {
+    list.innerHTML = '<div class="empty-list">저장된 항목 없음</div>';
+    return;
+  }
+  list.innerHTML = '';
+  snapshot.forEach(doc => {
+    const data = doc.data();
+    const div = document.createElement('div');
+    div.className = 'saved-item';
+    const date = data.createdAt ? new Date(data.createdAt.seconds * 1000).toLocaleDateString('ko-KR') : '';
+    div.innerHTML = `
+      <img src="${data.imageData}" alt="${data.name}">
+      <div class="saved-item-info">
+        <div>
+          <div class="saved-item-title">${data.name}</div>
+          <div class="saved-item-date">${date}</div>
+        </div>
+        <button class="btn-del-item" data-id="${doc.id}" title="삭제">🗑️</button>
+      </div>
+    `;
+    div.querySelector('img').addEventListener('click', () => {
+      loadImageSrc(data.imageData);
+      document.getElementById('saveName').value = data.name;
+    });
+    div.querySelector('.btn-del-item').addEventListener('click', e => {
+      e.stopPropagation();
+      if (confirm(`"${data.name}"을 삭제할까요?`)) {
+        db.collection("apps/app-mu4w0ofr/items").doc(doc.id).delete()
+          .then(() => showToast('삭제 완료'))
+          .catch(err => showToast('삭제 실패'));
+      }
+    });
+    list.appendChild(div);
+  });
+});
+
+// 공유
+document.getElementById('btnShare').addEventListener('click', () => {
+  if (!baseImage) { showToast('먼저 사진을 불러오세요!'); return; }
+  const dataUrl = canvas.toDataURL('image/png');
+  document.getElementById('sharePreview').src = dataUrl;
+  document.getElementById('shareModal').classList.add('show');
+});
+
+document.getElementById('btnCloseModal').addEventListener('click', () => {
+  document.getElementById('shareModal').classList.remove('show');
+});
+
+document.getElementById('shareModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('shareModal'))
+    document.getElementById('shareModal').classList.remove('show');
+});
+
+document.getElementById('btnDownload').addEventListener('click', () => {
+  const link = document.createElement('a');
+  const name = document.getElementById('saveName').value.trim() || '포토마크업';
+  link.download = name + '.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+  showToast('📥 다운로드 시작!');
+});
+
+document.getElementById('btnCopyImg').addEventListener('click', async () => {
+  try {
+    canvas.toBlob(async blob => {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': blob })
+        ]);
+        showToast('📋 클립보드에 복사됨!');
+      } catch(e) {
+        showToast('클립보드 복사 실패 (다운로드 사용하세요)');
+      }
+    }, 'image/png');
+  } catch(e) {
+    showToast('클립보드 복사 미지원 브라우저');
+  }
+});
+
+// 유틸
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function setStatus(msg) {
+  document.getElementById('statusMsg').textContent = msg;
+}
+
+// 이모티콘 팔레트 바깥 클릭 닫기
+document.addEventListener('click', e => {
+  if (!emojiPalette.contains(e.target) && e.target !== toolBtns['emoji']) {
+    emojiPalette.classList.remove('show');
+  }
+});
+
+// 클립보드 붙여넣기로 이미지 로드
+document.addEventListener('paste', e => {
+  const items = e.clipboardData.items;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      const blob = item.getAsFile();
+      loadImageFile(blob);
+      break;
+    }
+  }
+});
+
+setStatus('사진을 불러오세요 (📂 버튼 또는 붙여넣기)');
+</script>
+</body>
+</html>
