@@ -267,6 +267,10 @@
           📂 사진열기
           <input type="file" id="fileInput" accept="image/*" style="display:none">
         </label>
+        <label class="tool-btn" title="카메라로 촬영" style="cursor:pointer;">
+          📷 촬영하기
+          <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
+        </label>
       </div>
 
       <!-- 도구 선택 -->
@@ -356,6 +360,7 @@
     <h3>📤 이미지 공유</h3>
     <img id="sharePreview" src="" alt="미리보기">
     <div class="modal-btns">
+      <button class="btn-download" id="btnNativeShare">📱 카톡 등으로 공유</button>
       <button class="btn-download" id="btnDownload">⬇️ 다운로드</button>
       <button class="btn-copy" id="btnCopyImg">📋 클립보드 복사</button>
       <button class="btn-close-modal" id="btnCloseModal">✖ 닫기</button>
@@ -400,6 +405,35 @@ const ctx = canvas.getContext('2d');
 const canvasWrapper = document.getElementById('canvasWrapper');
 const placeholder = document.getElementById('placeholder');
 const canvasContainer = document.getElementById('canvasContainer');
+
+// Firestore 문서는 1개당 약 1MB 제한이 있다. 카메라로 찍은 고화질 사진은
+// 압축해도 이 한도를 넘기기 쉬우므로, 용량이 넘으면 화질/크기를 단계적으로 줄여서
+// 저장용 데이터를 안전한 범위로 맞춘다.
+function canvasToDataURLUnderLimit(sourceCanvas, maxBytes) {
+  let quality = 0.75;
+  let workCanvas = sourceCanvas;
+  let dataUrl = workCanvas.toDataURL('image/jpeg', quality);
+
+  // 1단계: 화질을 낮춰본다
+  while (dataUrl.length * 0.75 > maxBytes && quality > 0.25) {
+    quality -= 0.1;
+    dataUrl = workCanvas.toDataURL('image/jpeg', quality);
+  }
+
+  // 2단계: 그래도 크면 이미지 크기 자체를 줄인다
+  let scale = 1;
+  while (dataUrl.length * 0.75 > maxBytes && scale > 0.3) {
+    scale -= 0.15;
+    const scaled = document.createElement('canvas');
+    scaled.width = Math.max(1, Math.round(sourceCanvas.width * scale));
+    scaled.height = Math.max(1, Math.round(sourceCanvas.height * scale));
+    scaled.getContext('2d').drawImage(sourceCanvas, 0, 0, scaled.width, scaled.height);
+    workCanvas = scaled;
+    dataUrl = workCanvas.toDataURL('image/jpeg', 0.6);
+  }
+
+  return dataUrl;
+}
 
 // 두 레이어를 합쳐서 저장/공유/다운로드용 캔버스를 만든다
 function getMergedCanvas() {
@@ -531,6 +565,12 @@ document.getElementById('btnClear').addEventListener('click', () => {
 
 // 이미지 불러오기
 document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) loadImageFile(file);
+  e.target.value = '';
+});
+
+document.getElementById('cameraInput').addEventListener('change', e => {
   const file = e.target.files[0];
   if (file) loadImageFile(file);
   e.target.value = '';
@@ -777,9 +817,27 @@ document.getElementById('btnSave').addEventListener('click', saveToFirestore);
 function saveToFirestore() {
   if (!baseImage) { showToast('먼저 사진을 불러오세요!'); return; }
   const name = document.getElementById('saveName').value.trim() || '작업물';
-  const merged = getMergedCanvas();
-  const dataUrl = merged.toDataURL('image/jpeg', 0.7);
   setStatus('저장 중...');
+
+  let dataUrl;
+  try {
+    const merged = getMergedCanvas();
+    // Firestore 문서 한도(1MB)에 여유를 두고 700KB 이하로 맞춘다
+    dataUrl = canvasToDataURLUnderLimit(merged, 700000);
+  } catch (err) {
+    console.error('이미지 압축 오류:', err);
+    showToast('❌ 이미지를 처리하지 못했습니다: ' + (err.message || err), 5000);
+    setStatus('저장 실패');
+    return;
+  }
+
+  const approxBytes = dataUrl.length * 0.75;
+  if (approxBytes > 950000) {
+    showToast('❌ 사진 용량이 너무 커서 저장할 수 없어요. 📤 공유 > 다운로드를 이용해주세요.', 5000);
+    setStatus('저장 실패 (용량 초과)');
+    return;
+  }
+
   db.collection("apps/app-mu4w0ofr/items").add({
     name: name,
     imageData: dataUrl,
@@ -788,8 +846,10 @@ function saveToFirestore() {
     showToast('✅ 저장 완료!');
     setStatus('저장됨');
   }).catch(err => {
-    console.error(err);
-    showToast('❌ 저장 실패: ' + err.message);
+    console.error('Firestore 저장 오류:', err);
+    let msg = err.message || String(err);
+    if (err.code === 'permission-denied') msg = 'Firebase 저장 권한이 없습니다 (보안 규칙을 확인해주세요)';
+    showToast('❌ 저장 실패: ' + msg, 5000);
     setStatus('저장 실패');
   });
 }
@@ -851,6 +911,33 @@ document.getElementById('shareModal').addEventListener('click', e => {
     document.getElementById('shareModal').classList.remove('show');
 });
 
+// 카톡 등으로 바로 공유: OS의 공유 시트를 띄워서 이미지를 파일로 전달한다.
+// (카카오톡 전용 SDK 버튼은 카카오 디벨로퍼스 JS 키 + 이미지 공개 URL이 필요해서
+// 이 앱 구조(base64 저장)와는 맞지 않아, 대신 표준 공유 시트를 사용한다)
+document.getElementById('btnNativeShare').addEventListener('click', () => {
+  if (!baseImage) { showToast('먼저 사진을 불러오세요!'); return; }
+  const merged = getMergedCanvas();
+  merged.toBlob(async blob => {
+    if (!blob) { showToast('공유할 이미지를 만들지 못했습니다'); return; }
+    const fileName = (document.getElementById('saveName').value.trim() || '포토마크업') + '.png';
+    const file = new File([blob], fileName, { type: 'image/png' });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: fileName,
+          text: '포토 마크업으로 만든 이미지'
+        });
+      } catch (e) {
+        if (e.name !== 'AbortError') showToast('공유가 취소되었거나 실패했습니다');
+      }
+    } else {
+      showToast('이 브라우저에서는 앱 공유가 지원되지 않아요. 다운로드 후 카톡에 직접 첨부해주세요.', 4000);
+    }
+  }, 'image/png');
+});
+
 document.getElementById('btnDownload').addEventListener('click', () => {
   const link = document.createElement('a');
   const name = document.getElementById('saveName').value.trim() || '포토마크업';
@@ -880,11 +967,11 @@ document.getElementById('btnCopyImg').addEventListener('click', async () => {
 });
 
 // 유틸
-function showToast(msg) {
+function showToast(msg, duration) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 3000);
+  setTimeout(() => t.classList.remove('show'), duration || 3000);
 }
 
 function setStatus(msg) {
