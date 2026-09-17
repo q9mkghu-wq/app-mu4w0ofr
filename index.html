@@ -156,12 +156,24 @@
     background: #0a0a1a;
     position: relative;
   }
-  #mainCanvas {
-    max-width: 100%; max-height: 100%;
-    cursor: crosshair;
-    display: block;
+
+  /* 캔버스 래퍼: 사진(baseCanvas)과 그림(mainCanvas)을 겹쳐서 표시 */
+  #canvasWrapper {
+    position: relative;
+    display: none;
     box-shadow: 0 0 30px rgba(0,0,0,0.5);
   }
+  #baseCanvas, #mainCanvas {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+  }
+  #mainCanvas {
+    position: absolute;
+    top: 0; left: 0;
+    cursor: crosshair;
+  }
+
   .canvas-placeholder {
     text-align: center; color: #444;
     pointer-events: none;
@@ -295,7 +307,7 @@
 
       <!-- 액션 -->
       <div class="tool-group">
-        <button class="tool-btn" id="btnUndo" title="실행취소">↩️ 취소</button>
+        <button class="tool-btn" id="btnUndo" title="실행취소 (Ctrl+Z)">↩️ 취소</button>
         <button class="tool-btn" id="btnClear" title="전체지우기" style="color:#e94560">🗑️ 초기화</button>
         <button class="tool-btn green" id="btnSave" title="저장">💾 저장</button>
         <button class="tool-btn action" id="btnShare" title="공유">📤 공유</button>
@@ -316,9 +328,12 @@
       </div>
     </div>
 
-    <!-- 캔버스 -->
+    <!-- 캔버스: baseCanvas(사진) 위에 mainCanvas(그림, 투명)를 겹침 -->
     <div class="canvas-container" id="canvasContainer">
-      <canvas id="mainCanvas" style="display:none"></canvas>
+      <div id="canvasWrapper">
+        <canvas id="baseCanvas"></canvas>
+        <canvas id="mainCanvas"></canvas>
+      </div>
       <div class="canvas-placeholder" id="placeholder">
         <div class="icon">🖼️</div>
         <p>사진을 불러오거나 드래그하여 시작하세요</p>
@@ -376,10 +391,26 @@ let pendingTextPos = null;
 let pendingEmojiPos = null;
 let fontSizeForText = 24;
 
+// baseCanvas: 사진 전용 레이어 (변하지 않음)
+// mainCanvas: 그림/주석 전용 레이어 (투명 배경, 지우개는 여기서만 동작)
+const baseCanvas = document.getElementById('baseCanvas');
+const baseCtx = baseCanvas.getContext('2d');
 const canvas = document.getElementById('mainCanvas');
 const ctx = canvas.getContext('2d');
+const canvasWrapper = document.getElementById('canvasWrapper');
 const placeholder = document.getElementById('placeholder');
 const canvasContainer = document.getElementById('canvasContainer');
+
+// 두 레이어를 합쳐서 저장/공유/다운로드용 캔버스를 만든다
+function getMergedCanvas() {
+  const merged = document.createElement('canvas');
+  merged.width = canvas.width;
+  merged.height = canvas.height;
+  const mctx = merged.getContext('2d');
+  mctx.drawImage(baseCanvas, 0, 0);
+  mctx.drawImage(canvas, 0, 0);
+  return merged;
+}
 
 // 이모티콘 팔레트 채우기
 const emojiPalette = document.getElementById('emojiPalette');
@@ -439,11 +470,9 @@ Object.keys(toolBtns).forEach(k => {
         selectTool('pen');
       } else {
         const rect = toolBtns[k].getBoundingClientRect();
-        const containerRect = canvasContainer.getBoundingClientRect();
-        emojiPalette.style.top = (rect.bottom - containerRect.top + canvasContainer.offsetTop + 60) + 'px';
-        emojiPalette.style.left = (rect.left) + 'px';
         emojiPalette.style.position = 'fixed';
         emojiPalette.style.top = (rect.bottom + 4) + 'px';
+        emojiPalette.style.left = (rect.left) + 'px';
         emojiPalette.classList.add('show');
         currentTool = 'emoji';
         Object.keys(toolBtns).forEach(t => toolBtns[t].classList.remove('active'));
@@ -464,31 +493,39 @@ function selectEmoji(em) {
   setStatus('캔버스를 클릭하면 이모티콘이 추가됩니다');
 }
 
-// 실행 취소
+// 실행 취소 (그림 레이어의 직전 상태로 정확히 1단계만 되돌림)
 document.getElementById('btnUndo').addEventListener('click', undo);
 function undo() {
   if (history.length === 0) return;
-  history.pop();
-  if (history.length === 0) {
-    if (baseImage) drawBase();
-    else ctx.clearRect(0, 0, canvas.width, canvas.height);
-  } else {
-    const img = new Image();
-    img.onload = () => ctx.drawImage(img, 0, 0);
-    img.src = history[history.length - 1];
-  }
+  const prevState = history.pop();
+  const img = new Image();
+  img.onload = () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+  };
+  img.src = prevState;
 }
 
+// 단축키 Ctrl+Z / Cmd+Z 로도 취소 가능
+document.addEventListener('keydown', e => {
+  const isUndoKey = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z';
+  if (isUndoKey) {
+    e.preventDefault();
+    undo();
+  }
+});
+
 function saveHistory() {
+  // 그림(주석) 레이어만 저장한다 - 투명 PNG이므로 사진 위에 겹쳤을 때 그대로 복원됨
   history.push(canvas.toDataURL());
   if (history.length > 30) history.shift();
 }
 
-// 전체 초기화
+// 전체 초기화 (사진은 유지, 그림/주석만 지움)
 document.getElementById('btnClear').addEventListener('click', () => {
   if (!baseImage) return;
   saveHistory();
-  drawBase();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   setStatus('초기화됨');
 });
 
@@ -515,12 +552,15 @@ function loadImageSrc(src) {
     const ratio = Math.min(maxW / w, maxH / h, 1);
     w = Math.round(w * ratio);
     h = Math.round(h * ratio);
+    baseCanvas.width = w;
+    baseCanvas.height = h;
     canvas.width = w;
     canvas.height = h;
     baseImage = img;
     history = [];
     drawBase();
-    canvas.style.display = 'block';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvasWrapper.style.display = 'block';
     placeholder.style.display = 'none';
     setStatus('사진 로드 완료 - 그리기 시작!');
   };
@@ -528,8 +568,8 @@ function loadImageSrc(src) {
 }
 
 function drawBase() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (baseImage) ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+  baseCtx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
+  if (baseImage) baseCtx.drawImage(baseImage, 0, 0, baseCanvas.width, baseCanvas.height);
 }
 
 // 드래그 앤 드롭
@@ -583,7 +623,9 @@ function onDown(e) {
     ctx.beginPath();
     ctx.moveTo(pos.x, pos.y);
     ctx.lineWidth = currentTool === 'eraser' ? currentSize * 3 : currentSize;
-    ctx.strokeStyle = currentTool === 'eraser' ? null : currentColor;
+    // 지우개는 색상 대신 destination-out으로 그림 레이어의 픽셀 자체를 투명하게 지운다
+    // -> 아래 있는 baseCanvas(원본 사진)가 그대로 드러남 (덧칠이 아니라 실제 지우기)
+    ctx.strokeStyle = currentTool === 'eraser' ? 'rgba(0,0,0,1)' : currentColor;
     ctx.globalCompositeOperation = currentTool === 'eraser' ? 'destination-out' : 'source-over';
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -601,16 +643,21 @@ function onMove(e) {
     return;
   }
 
-  // 도형: 스냅샷 복원 후 재그리기
+  // 도형: 직전 상태로 되돌린 뒤 미리보기 도형을 다시 그린다 (잔상 방지를 위해 clear 후 로드 완료를 기다림)
   if (!snapshotBeforeShape) {
     snapshotBeforeShape = history[history.length - 1];
   }
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (snapshotBeforeShape) {
     const img2 = new Image();
+    img2.onload = () => {
+      ctx.drawImage(img2, 0, 0);
+      drawShape(currentTool, startX, startY, pos.x, pos.y);
+    };
     img2.src = snapshotBeforeShape;
-    ctx.drawImage(img2, 0, 0);
+  } else {
+    drawShape(currentTool, startX, startY, pos.x, pos.y);
   }
-  drawShape(currentTool, startX, startY, pos.x, pos.y);
 }
 
 function onUp(e) {
@@ -724,13 +771,14 @@ function confirmText() {
   setStatus('텍스트 추가됨');
 }
 
-// 저장
+// 저장 (사진+그림을 합쳐서 저장)
 document.getElementById('btnSave').addEventListener('click', saveToFirestore);
 
 function saveToFirestore() {
   if (!baseImage) { showToast('먼저 사진을 불러오세요!'); return; }
   const name = document.getElementById('saveName').value.trim() || '작업물';
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+  const merged = getMergedCanvas();
+  const dataUrl = merged.toDataURL('image/jpeg', 0.7);
   setStatus('저장 중...');
   db.collection("apps/app-mu4w0ofr/items").add({
     name: name,
@@ -785,10 +833,11 @@ db.collection("apps/app-mu4w0ofr/items").orderBy('createdAt', 'desc').limit(20).
   });
 });
 
-// 공유
+// 공유 (사진+그림을 합쳐서 미리보기)
 document.getElementById('btnShare').addEventListener('click', () => {
   if (!baseImage) { showToast('먼저 사진을 불러오세요!'); return; }
-  const dataUrl = canvas.toDataURL('image/png');
+  const merged = getMergedCanvas();
+  const dataUrl = merged.toDataURL('image/png');
   document.getElementById('sharePreview').src = dataUrl;
   document.getElementById('shareModal').classList.add('show');
 });
@@ -806,14 +855,16 @@ document.getElementById('btnDownload').addEventListener('click', () => {
   const link = document.createElement('a');
   const name = document.getElementById('saveName').value.trim() || '포토마크업';
   link.download = name + '.png';
-  link.href = canvas.toDataURL('image/png');
+  const merged = getMergedCanvas();
+  link.href = merged.toDataURL('image/png');
   link.click();
   showToast('📥 다운로드 시작!');
 });
 
 document.getElementById('btnCopyImg').addEventListener('click', async () => {
   try {
-    canvas.toBlob(async blob => {
+    const merged = getMergedCanvas();
+    merged.toBlob(async blob => {
       try {
         await navigator.clipboard.write([
           new ClipboardItem({ 'image/png': blob })
