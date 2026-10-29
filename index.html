@@ -277,8 +277,14 @@
   }
   .toast.show { transform: translateY(0); opacity: 1; }
 
+  .mobile-only { display: none; }
   @media (max-width: 600px) {
     .sidebar { display: none; }
+    .sidebar.mobile-open {
+      display: flex; position: fixed; inset: 0;
+      width: 100%; min-width: 0; z-index: 300;
+    }
+    .mobile-only { display: inline-block; }
     .toolbar { gap: 4px; }
     .tool-btn { padding: 5px 7px; font-size: 0.85rem; }
   }
@@ -298,6 +304,7 @@
   <div class="sidebar">
     <div class="sidebar-header">
       💾 저장된 작업물
+      <button class="tool-btn mobile-only" id="btnListClose" style="margin-left:auto">✖ 닫기</button>
     </div>
     <div class="saved-list" id="savedList">
       <div class="empty-list">저장된 항목 없음</div>
@@ -363,6 +370,7 @@
         <button class="tool-btn" id="btnClear" title="전체지우기" style="color:#e94560">🗑️ 초기화</button>
         <button class="tool-btn green" id="btnSave" title="저장">💾 저장</button>
         <button class="tool-btn action" id="btnShare" title="공유">📤 공유</button>
+        <button class="tool-btn mobile-only" id="btnList" title="앱에 저장된 목록 보기">🗂️ 목록</button>
       </div>
     </div>
 
@@ -428,7 +436,7 @@
     <img id="sharePreview" src="" alt="미리보기">
     <div class="modal-btns">
       <button class="btn-download" id="btnNativeShare">📱 카톡 등으로 공유</button>
-      <button class="btn-download" id="btnDownload">⬇️ 다운로드</button>
+      <button class="btn-download" id="btnDownload">📥 기기에 저장</button>
       <button class="btn-copy" id="btnCopyImg">📋 클립보드 복사</button>
       <button class="btn-close-modal" id="btnCloseModal">✖ 닫기</button>
     </div>
@@ -574,6 +582,8 @@ function getMergedCanvas() {
   merged.width = canvas.width;
   merged.height = canvas.height;
   const mctx = merged.getContext('2d');
+  mctx.fillStyle = '#ffffff';
+  mctx.fillRect(0, 0, merged.width, merged.height);
   mctx.drawImage(baseCanvas, 0, 0);
   mctx.drawImage(canvas, 0, 0);
   // 치수선은 핸들(선택 표시) 없이 깔끔하게 합친다
@@ -1433,9 +1443,15 @@ function confirmDimension() {
 }
 
 // 저장 (사진+그림을 합쳐서 저장)
-document.getElementById('btnSave').addEventListener('click', saveToFirestore);
+// 💾 저장: 폰/PC 에 이미지 파일로 저장 + 앱(클라우드) 저장목록에도 저장
+document.getElementById('btnSave').addEventListener('click', async () => {
+  if (!baseImage) { showToast('먼저 사진을 불러오세요!'); return; }
+  setStatus('저장 중...');
+  const deviceResult = await saveImageToDevice();   // 'downloaded' | 'shared' | false
+  saveToFirestore(deviceResult);
+});
 
-function saveToFirestore() {
+function saveToFirestore(deviceResult) {
   if (!baseImage) { showToast('먼저 사진을 불러오세요!'); return; }
   const name = document.getElementById('saveName').value.trim() || '작업물';
   setStatus('저장 중...');
@@ -1464,7 +1480,11 @@ function saveToFirestore() {
     imageData: dataUrl,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   }).then(() => {
-    showToast('✅ 저장 완료!');
+    let msg = '✅ 앱 저장목록에 저장했어요';
+    if (deviceResult === 'downloaded') msg = '✅ 저장 완료! 폰의 다운로드 폴더(갤러리의 Download 앨범)에도 저장했어요';
+    else if (deviceResult === 'shared') msg = '✅ 앱에 저장 완료! (공유창에서 "이미지 저장"을 골랐다면 사진첩에도 저장됐어요)';
+    else msg = '✅ 앱에는 저장했지만 기기 저장은 되지 않았어요 (📤 공유 > 📥 기기에 저장을 눌러보세요)';
+    showToast(msg, 5500);
     setStatus('저장됨');
   }).catch(err => {
     console.error('Firestore 저장 오류:', err);
@@ -1501,6 +1521,7 @@ db.collection("apps/app-mu4w0ofr/items").orderBy('createdAt', 'desc').limit(20).
     div.querySelector('img').addEventListener('click', () => {
       loadImageSrc(data.imageData);
       document.getElementById('saveName').value = data.name;
+      document.querySelector('.sidebar').classList.remove('mobile-open');
     });
     div.querySelector('.btn-del-item').addEventListener('click', e => {
       e.stopPropagation();
@@ -1559,14 +1580,69 @@ document.getElementById('btnNativeShare').addEventListener('click', () => {
   }, 'image/png');
 });
 
-document.getElementById('btnDownload').addEventListener('click', () => {
-  const link = document.createElement('a');
-  const name = document.getElementById('saveName').value.trim() || '포토마크업';
-  link.download = name + '.png';
-  const merged = getMergedCanvas();
-  link.href = merged.toDataURL('image/png');
-  link.click();
-  showToast('📥 다운로드 시작!');
+// ----- 기기(폰/PC)에 이미지 파일로 저장 -----
+// iOS: 웹에서 사진첩에 직접 저장하는 방법은 공유창의 "이미지 저장" 뿐이라 공유창을 띄운다.
+// 안드로이드/PC: 파일로 내려받는다 (폰의 다운로드 폴더, 갤러리 앱의 Download 앨범에 보인다).
+// 사진은 JPEG(화질 92%)로 저장해 용량을 줄인다. (PNG 는 사진에서 수 MB 로 커져 모바일 다운로드가 실패하기 쉽다)
+function isIOS() {
+  const ua = navigator.userAgent || '';
+  return /iP(hone|ad|od)/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function saveImageToDevice() {
+  return new Promise(resolve => {
+    const merged = getMergedCanvas();
+    const fileName = (document.getElementById('saveName').value.trim() || '포토마크업') + '.jpg';
+    merged.toBlob(async blob => {
+      if (!blob) { showToast('이미지를 만들지 못했어요'); resolve(false); return; }
+
+      if (isIOS() && navigator.canShare && navigator.share) {
+        try {
+          const file = new File([blob], fileName, { type: 'image/jpeg' });
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: fileName });
+            resolve('shared');
+            return;
+          }
+        } catch (e) {
+          if (e && e.name === 'AbortError') { resolve(false); return; }   // 사용자가 공유창을 닫음
+          // 그 외 오류는 아래 다운로드 방식으로 다시 시도
+        }
+      }
+
+      try {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        resolve('downloaded');
+      } catch (err) {
+        console.error('기기 저장 오류:', err);
+        resolve(false);
+      }
+    }, 'image/jpeg', 0.92);
+  });
+}
+
+// 공유창의 "기기에 저장" 버튼
+document.getElementById('btnDownload').addEventListener('click', async () => {
+  if (!baseImage) { showToast('먼저 사진을 불러오세요!'); return; }
+  const result = await saveImageToDevice();
+  if (result === 'downloaded') showToast('📥 저장했어요 (폰의 다운로드 폴더 / 갤러리의 Download 앨범)', 4500);
+  else if (result === 'shared') showToast('공유창에서 "이미지 저장"을 고르면 사진첩에 저장돼요', 4500);
+  else showToast('기기 저장이 취소되었거나 실패했어요', 3500);
+});
+
+// 모바일: 앱에 저장된 목록 열기/닫기
+document.getElementById('btnList').addEventListener('click', () => {
+  document.querySelector('.sidebar').classList.add('mobile-open');
+});
+document.getElementById('btnListClose').addEventListener('click', () => {
+  document.querySelector('.sidebar').classList.remove('mobile-open');
 });
 
 document.getElementById('btnCopyImg').addEventListener('click', async () => {
