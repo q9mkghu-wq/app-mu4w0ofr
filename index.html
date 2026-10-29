@@ -172,7 +172,7 @@
     display: none;
     box-shadow: 0 0 30px rgba(0,0,0,0.5);
   }
-  #baseCanvas, #mainCanvas {
+  #baseCanvas, #mainCanvas, #dimCanvas, #uiCanvas {
     display: block;
     max-width: none;
     max-height: none;
@@ -182,6 +182,43 @@
     top: 0; left: 0;
     touch-action: none;
     cursor: crosshair;
+  }
+
+  /* 치수선/핸들 오버레이 (터치는 아래 mainCanvas 가 받는다) */
+  #dimCanvas, #uiCanvas {
+    position: absolute; top: 0; left: 0;
+    pointer-events: none;
+  }
+
+  /* 치수선 편집 바 */
+  .dim-bar {
+    display: none; position: absolute; z-index: 60;
+    left: 50%; transform: translateX(-50%); bottom: 8px;
+    max-width: 96%; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px;
+    background: #16213e; border: 1px solid #e94560; border-radius: 12px; padding: 6px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  }
+  .dim-bar.show { display: flex; }
+  .dim-bar.top { bottom: auto; top: 8px; }
+  .dim-bar button {
+    min-height: 44px; min-width: 44px; padding: 6px 10px;
+    border: none; border-radius: 8px; background: #0f3460; color: #eee;
+    font-size: 0.95rem; cursor: pointer;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none;
+  }
+  .dim-bar button:active { background: #1a4a80; }
+  .dim-bar .danger { background: #7a1f2e; }
+  .dim-bar .ok { background: #1a6b3c; }
+  .dim-bar .grp { display: flex; align-items: center; gap: 4px; }
+  .dim-bar .grp-label { font-size: 0.7rem; color: #aaa; }
+
+  /* 확대경 */
+  #loupe {
+    display: none; position: fixed; z-index: 400;
+    width: 120px; height: 120px; border-radius: 50%;
+    border: 3px solid #fff; background: #000;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.7);
+    pointer-events: none;
   }
 
   .canvas-placeholder {
@@ -357,6 +394,16 @@
       <div id="canvasWrapper">
         <canvas id="baseCanvas"></canvas>
         <canvas id="mainCanvas"></canvas>
+        <canvas id="dimCanvas"></canvas>
+        <canvas id="uiCanvas"></canvas>
+      </div>
+      <!-- 치수선 편집 바 (치수선을 선택하면 나타남) -->
+      <div class="dim-bar" id="dimBar">
+        <button id="dimEdit">✏️ 치수값</button>
+        <div class="grp"><span class="grp-label">선 길이</span><button id="dimLenMinus">−</button><button id="dimLenPlus">+</button></div>
+        <div class="grp"><span class="grp-label">굵기·글자</span><button id="dimSizeMinus">−</button><button id="dimSizePlus">+</button></div>
+        <button id="dimDelete" class="danger">🗑️ 삭제</button>
+        <button id="dimDone" class="ok">✔ 완료</button>
       </div>
       <div class="canvas-placeholder" id="placeholder">
         <div class="icon">🖼️</div>
@@ -390,6 +437,9 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- 확대경: 치수선 끝점을 드래그하는 동안 손가락 위쪽에 표시 -->
+<canvas id="loupe" width="240" height="240"></canvas>
+
 <script>
 // Firebase 초기화
 const firebaseConfig = {"apiKey":"AIzaSyAA9XxN-Pw0vbLT0f8-mI2bV0FgEx18iIU","authDomain":"appbuilder-4e83c.firebaseapp.com","projectId":"appbuilder-4e83c","storageBucket":"appbuilder-4e83c.firebasestorage.app","messagingSenderId":"1038242551917","appId":"1:1038242551917:web:4d59995638762401dd0764"};
@@ -414,6 +464,10 @@ let history = [];
 let baseImage = null;
 let pendingTextPos = null;
 let pendingEmojiPos = null;
+// 치수선 객체 목록 (좌표/크기는 모두 캔버스 px 기준으로 저장한다)
+let dims = [];
+let selectedDimId = null;
+let dimSeq = 0;
 let fontSizeForText = 24;
 
 // baseCanvas: 사진 전용 레이어 (변하지 않음)
@@ -423,6 +477,10 @@ const baseCtx = baseCanvas.getContext('2d');
 const canvas = document.getElementById('mainCanvas');
 const ctx = canvas.getContext('2d');
 const canvasWrapper = document.getElementById('canvasWrapper');
+const dimCanvas = document.getElementById('dimCanvas');
+const dimCtx = dimCanvas.getContext('2d');
+const uiCanvas = document.getElementById('uiCanvas');
+const uiCtx = uiCanvas.getContext('2d');
 const placeholder = document.getElementById('placeholder');
 const canvasContainer = document.getElementById('canvasContainer');
 
@@ -446,10 +504,11 @@ function fitCanvasDisplay() {
   const ratio = Math.min(maxW / baseCanvas.width, maxH / baseCanvas.height, 1);
   const cssW = Math.round(baseCanvas.width * ratio);
   const cssH = Math.round(baseCanvas.height * ratio);
-  [canvasWrapper, baseCanvas, canvas].forEach(el => {
+  [canvasWrapper, baseCanvas, canvas, dimCanvas, uiCanvas].forEach(el => {
     el.style.width = cssW + 'px';
     el.style.height = cssH + 'px';
   });
+  renderDims();   // 핸들 크기는 화면 기준이라 화면 크기가 바뀌면 다시 그린다
 }
 // 모바일 키보드가 올라올 때(높이만 변할 때)는 다시 맞추지 않고, 가로 폭이 바뀔 때(회전 등)만 맞춘다
 let lastInnerW = window.innerWidth;
@@ -517,6 +576,8 @@ function getMergedCanvas() {
   const mctx = merged.getContext('2d');
   mctx.drawImage(baseCanvas, 0, 0);
   mctx.drawImage(canvas, 0, 0);
+  // 치수선은 핸들(선택 표시) 없이 깔끔하게 합친다
+  dims.forEach(d => drawDimObject(mctx, d));
   return merged;
 }
 
@@ -569,7 +630,8 @@ function selectTool(tool) {
   toolBtns[tool].classList.add('active');
   canvas.style.cursor = tool === 'eraser' ? 'cell' : (tool === 'text' || tool === 'emoji') ? 'pointer' : 'crosshair';
   emojiPalette.classList.remove('show');
-  if (tool === 'dimension') setStatus('드래그해서 치수선을 그리면 숫자 입력창이 떠요');
+  if (tool === 'dimension') setStatus('드래그=새 치수선 / 끝점·선·글자를 잡고 움직이면 수정');
+  updateDimUI();
 }
 
 Object.keys(toolBtns).forEach(k => {
@@ -585,6 +647,7 @@ Object.keys(toolBtns).forEach(k => {
         emojiPalette.style.left = (rect.left) + 'px';
         emojiPalette.classList.add('show');
         currentTool = 'emoji';
+        updateDimUI();
         Object.keys(toolBtns).forEach(t => toolBtns[t].classList.remove('active'));
         toolBtns['emoji'].classList.add('active');
         canvas.style.cursor = 'pointer';
@@ -608,13 +671,20 @@ document.getElementById('btnUndo').addEventListener('click', undo);
 function undo() {
   if (popupMode === 'dimension') closeTextPopup();
   if (history.length === 0) return;
-  const prevState = history.pop();
-  const img = new Image();
-  img.onload = () => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0);
-  };
-  img.src = prevState;
+  const entry = history.pop();
+  // 치수선 상태 복원
+  dims = JSON.parse(entry.dims);
+  if (!dims.some(d => d.id === selectedDimId)) selectedDimId = null;
+  updateDimUI();
+  // 그림 레이어 복원 (img 가 null 이면 치수선만 바뀐 단계이므로 그림은 그대로 둔다)
+  if (entry.img) {
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = entry.img;
+  }
 }
 
 // 단축키 Ctrl+Z / Cmd+Z 로도 취소 가능
@@ -627,10 +697,14 @@ document.addEventListener('keydown', e => {
   }
 });
 
-function saveHistory() {
-  // 그림(주석) 레이어만 저장한다 - 투명 PNG이므로 사진 위에 겹쳤을 때 그대로 복원됨
-  history.push(canvas.toDataURL());
-  if (history.length > 20) history.shift();
+// 한 단계 "직전 상태"를 저장한다. 그림 레이어(투명 PNG) + 치수선 목록(JSON).
+// dimOnly=true 이면 치수선만 바뀌는 작업이라 그림 레이어는 다시 저장하지 않는다(빠르고 가볍게).
+function saveHistory(dimOnly) {
+  history.push({
+    img: dimOnly ? null : canvas.toDataURL(),
+    dims: JSON.stringify(dims)
+  });
+  if (history.length > 30) history.shift();
 }
 
 // 전체 초기화 (사진은 유지, 그림/주석만 지움)
@@ -639,6 +713,9 @@ document.getElementById('btnClear').addEventListener('click', () => {
   closeTextPopup();
   saveHistory();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  dims = [];
+  selectedDimId = null;
+  updateDimUI();
   setStatus('초기화됨');
 });
 
@@ -678,6 +755,12 @@ function loadImageSrc(src) {
     baseCanvas.height = h;
     canvas.width = w;
     canvas.height = h;
+    dimCanvas.width = w;
+    dimCanvas.height = h;
+    uiCanvas.width = w;
+    uiCanvas.height = h;
+    dims = [];
+    selectedDimId = null;
     baseImage = img;
     history = [];
     drawBase();
@@ -739,6 +822,8 @@ function onDown(e) {
   const pos = getPos(e);
   startX = pos.x; startY = pos.y;
 
+  if (currentTool === 'dimension') { onDimDown(e, pos); return; }
+
   if (currentTool === 'text') {
     pendingTextPos = pos;
     popupMode = 'text';
@@ -772,6 +857,8 @@ function onMove(e) {
   if (!isDrawing) return;
   const pos = getPos(e);
 
+  if (currentTool === 'dimension') { onDimMove(e, pos); return; }
+
   if (currentTool === 'pen' || currentTool === 'eraser') {
     ctx.lineTo(pos.x, pos.y);
     ctx.stroke();
@@ -782,9 +869,7 @@ function onMove(e) {
   }
 
   restoreSnapshot();
-  let end = pos;
-  if (currentTool === 'dimension') end = snapAxis(startX, startY, pos.x, pos.y);
-  drawShape(currentTool, startX, startY, end.x, end.y);
+  drawShape(currentTool, startX, startY, pos.x, pos.y);
 }
 
 function onUp(e) {
@@ -792,32 +877,16 @@ function onUp(e) {
   isDrawing = false;
   ctx.globalCompositeOperation = 'source-over';
 
+  if (currentTool === 'dimension') { onDimUp(e); return; }
+
   if (currentTool === 'pen' || currentTool === 'eraser') {
     ctx.beginPath();
     return;
   }
 
-  const pt = getClientPoint(e);
-  const pos = getPos(pt);
-  let end = pos;
-  if (currentTool === 'dimension') end = snapAxis(startX, startY, pos.x, pos.y);
-
-  // 너무 짧게 찍은 치수선은 취소한다
-  if (currentTool === 'dimension' && Math.hypot(end.x - startX, end.y - startY) < px(12)) {
-    restoreSnapshot();
-    history.pop();
-    setStatus('드래그해서 치수선을 그려주세요');
-    return;
-  }
-
+  const pos = getPos(getClientPoint(e));
   restoreSnapshot();
-  drawShape(currentTool, startX, startY, end.x, end.y);
-
-  if (currentTool === 'dimension') {
-    pendingDim = { x1: startX, y1: startY, x2: end.x, y2: end.y };
-    popupMode = 'dimension';
-    showTextPopup(pt);
-  }
+  drawShape(currentTool, startX, startY, pos.x, pos.y);
 }
 
 function drawShape(tool, x1, y1, x2, y2) {
@@ -835,8 +904,6 @@ function drawShape(tool, x1, y1, x2, y2) {
     ctx.stroke();
   } else if (tool === 'arrow') {
     drawArrow(x1, y1, x2, y2);
-  } else if (tool === 'dimension') {
-    drawDimensionLine(x1, y1, x2, y2);
   } else if (tool === 'rect') {
     ctx.beginPath();
     ctx.rect(x1, y1, x2 - x1, y2 - y1);
@@ -864,66 +931,6 @@ function drawArrow(x1, y1, x2, y2) {
   ctx.stroke();
 }
 
-// 속이 채워진 화살촉. (x, y) 가 뾰족한 끝, dir 은 화살이 향하는 방향
-function fillArrowHead(x, y, dir, size) {
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(x - size * Math.cos(dir - Math.PI / 7), y - size * Math.sin(dir - Math.PI / 7));
-  ctx.lineTo(x - size * Math.cos(dir + Math.PI / 7), y - size * Math.sin(dir + Math.PI / 7));
-  ctx.closePath();
-  ctx.fill();
-}
-
-// 치수선: 본선 + 양쪽 끝 화살촉 + 양쪽 끝 수직 보조선
-function drawDimensionLine(x1, y1, x2, y2) {
-  const len = Math.hypot(x2 - x1, y2 - y1);
-  if (len < 1) return;
-  const angle = Math.atan2(y2 - y1, x2 - x1);
-  const head = Math.min(px(Math.max(14, currentSize * 3.5)), len / 2.5);
-  const tick = px(Math.max(10, currentSize * 3));
-  const nx = -Math.sin(angle), ny = Math.cos(angle);
-
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.stroke();
-
-  fillArrowHead(x2, y2, angle, head);
-  fillArrowHead(x1, y1, angle + Math.PI, head);
-
-  ctx.beginPath();
-  ctx.moveTo(x1 - nx * tick, y1 - ny * tick);
-  ctx.lineTo(x1 + nx * tick, y1 + ny * tick);
-  ctx.moveTo(x2 - nx * tick, y2 - ny * tick);
-  ctx.lineTo(x2 + nx * tick, y2 + ny * tick);
-  ctx.stroke();
-}
-
-// 치수 글자: 선 가운데 위쪽에, 선 방향에 맞춰 기울여서 (글자가 뒤집히지 않게) 표시
-function drawDimensionLabel(label, x1, y1, x2, y2) {
-  let angle = Math.atan2(y2 - y1, x2 - x1);
-  if (angle > Math.PI / 2 - 0.001 || angle < -Math.PI / 2 - 0.001) angle += Math.PI;
-  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-  const fontPx = px(Math.max(14, currentSize * 2.5 + 10));
-  const pad = fontPx * 0.25;
-  const gap = px(4) + px(currentSize) / 2;
-
-  ctx.save();
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.translate(mx, my);
-  ctx.rotate(angle);
-  ctx.font = `bold ${fontPx}px 'Segoe UI', sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  const tw = ctx.measureText(label).width;
-  const cy = -(gap + pad + fontPx / 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect(-tw / 2 - pad, cy - fontPx / 2 - pad, tw + pad * 2, fontPx + pad * 2);
-  ctx.fillStyle = currentColor;
-  ctx.fillText(label, 0, cy);
-  ctx.restore();
-}
-
 function drawEmoji(emoji, x, y) {
   const size = px(Math.max(24, currentSize * 8));
   ctx.font = `${size}px serif`;
@@ -933,23 +940,427 @@ function drawEmoji(emoji, x, y) {
   ctx.fillText(emoji, x, y);
 }
 
+// =====================================================================
+//  치수선 (편집 가능한 객체)
+//  - 좌표/굵기는 캔버스 px 로 저장 -> 화면 크기가 바뀌어도 사진 기준 비율이 유지된다
+//  - d.f: 만들 때의 (캔버스 px / 화면 px) 배율, d.cs: 만들 때의 펜 크기, d.k: 사용자 크기 배율
+// =====================================================================
+let dimDrag = null;          // 드래그 중인 작업 { mode, dim, sx, sy, moved, orig }
+let activeDim = null;        // 치수 입력창이 가리키는 치수선
+let activeDimIsNew = false;  // 방금 새로 그린 치수선인지
+
+function clampX(v) { return Math.max(0, Math.min(canvas.width, v)); }
+function clampY(v) { return Math.max(0, Math.min(canvas.height, v)); }
+function getSelectedDim() { return dims.find(d => d.id === selectedDimId) || null; }
+
+function newDim(x, y) {
+  return { id: ++dimSeq, x1: x, y1: y, x2: x, y2: y, label: '', color: currentColor, cs: currentSize, f: scaleFactor(), k: 1 };
+}
+
+function dimStyle(d) {
+  const u = d.f * d.k;
+  const len = Math.hypot(d.x2 - d.x1, d.y2 - d.y1);
+  return {
+    u: u,
+    len: len,
+    lw: Math.max(1, u * d.cs),
+    head: Math.min(u * Math.max(14, d.cs * 3.5), len / 2.5),
+    tick: u * Math.max(10, d.cs * 3),
+    fontPx: u * Math.max(14, d.cs * 2.5 + 10)
+  };
+}
+
+// 치수 글자의 위치/각도 (선 가운데 위쪽, 글자가 뒤집히지 않게)
+function dimLabelGeom(d, st) {
+  let a = Math.atan2(d.y2 - d.y1, d.x2 - d.x1);
+  if (a > Math.PI / 2 - 0.001 || a < -Math.PI / 2 - 0.001) a += Math.PI;
+  const mx = (d.x1 + d.x2) / 2, my = (d.y1 + d.y2) / 2;
+  const pad = st.fontPx * 0.25;
+  const gap = st.lw / 2 + st.u * 4;
+  const cy = -(gap + pad + st.fontPx / 2);
+  return { a: a, mx: mx, my: my, pad: pad, cy: cy, lx: mx - cy * Math.sin(a), ly: my + cy * Math.cos(a) };
+}
+
+function fillArrowHeadOn(c, x, y, dir, size) {
+  c.beginPath();
+  c.moveTo(x, y);
+  c.lineTo(x - size * Math.cos(dir - Math.PI / 7), y - size * Math.sin(dir - Math.PI / 7));
+  c.lineTo(x - size * Math.cos(dir + Math.PI / 7), y - size * Math.sin(dir + Math.PI / 7));
+  c.closePath();
+  c.fill();
+}
+
+// 치수선 하나를 그린다: 본선 + 양쪽 끝 화살촉 + 양쪽 끝 수직 보조선 + 치수 글자
+function drawDimObject(c, d) {
+  const st = dimStyle(d);
+  if (st.len < 1) return;
+  const angle = Math.atan2(d.y2 - d.y1, d.x2 - d.x1);
+  const nx = -Math.sin(angle), ny = Math.cos(angle);
+
+  c.save();
+  c.globalCompositeOperation = 'source-over';
+  c.strokeStyle = d.color;
+  c.fillStyle = d.color;
+  c.lineWidth = st.lw;
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+
+  c.beginPath();
+  c.moveTo(d.x1, d.y1);
+  c.lineTo(d.x2, d.y2);
+  c.stroke();
+
+  fillArrowHeadOn(c, d.x2, d.y2, angle, st.head);
+  fillArrowHeadOn(c, d.x1, d.y1, angle + Math.PI, st.head);
+
+  c.beginPath();
+  c.moveTo(d.x1 - nx * st.tick, d.y1 - ny * st.tick);
+  c.lineTo(d.x1 + nx * st.tick, d.y1 + ny * st.tick);
+  c.moveTo(d.x2 - nx * st.tick, d.y2 - ny * st.tick);
+  c.lineTo(d.x2 + nx * st.tick, d.y2 + ny * st.tick);
+  c.stroke();
+
+  if (d.label) {
+    const g = dimLabelGeom(d, st);
+    c.translate(g.mx, g.my);
+    c.rotate(g.a);
+    c.font = `bold ${st.fontPx}px 'Segoe UI', sans-serif`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    const tw = c.measureText(d.label).width;
+    c.fillStyle = 'rgba(0,0,0,0.55)';
+    c.fillRect(-tw / 2 - g.pad, g.cy - st.fontPx / 2 - g.pad, tw + g.pad * 2, st.fontPx + g.pad * 2);
+    c.fillStyle = d.color;
+    c.fillText(d.label, 0, g.cy);
+  }
+  c.restore();
+}
+
+// 선택된 치수선의 끝점 핸들 (화면 표시용, 저장/공유 이미지에는 들어가지 않는다)
+function drawHandles(c, d) {
+  const u = scaleFactor();
+  const r = 14 * u;
+  c.save();
+  [[d.x1, d.y1], [d.x2, d.y2]].forEach(pt => {
+    const x = pt[0], y = pt[1];
+    c.beginPath();
+    c.arc(x, y, r, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(255,255,255,0.18)';
+    c.fill();
+    c.lineWidth = 3.5 * u;
+    c.strokeStyle = 'rgba(0,0,0,0.6)';
+    c.stroke();
+    c.lineWidth = 1.8 * u;
+    c.strokeStyle = '#ffffff';
+    c.stroke();
+    // 정확한 끝점 위치를 보여주는 작은 십자
+    c.beginPath();
+    c.moveTo(x - r * 0.45, y); c.lineTo(x + r * 0.45, y);
+    c.moveTo(x, y - r * 0.45); c.lineTo(x, y + r * 0.45);
+    c.lineWidth = 1.2 * u;
+    c.strokeStyle = '#ffffff';
+    c.stroke();
+  });
+  c.restore();
+}
+
+function renderDims() {
+  dimCtx.clearRect(0, 0, dimCanvas.width, dimCanvas.height);
+  dims.forEach(d => drawDimObject(dimCtx, d));
+  uiCtx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
+  const sel = getSelectedDim();
+  if (sel && currentTool === 'dimension') drawHandles(uiCtx, sel);
+}
+
+// 점 (ax, ay) 에서 선분까지의 거리
+function segDist(ax, ay, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const l2 = dx * dx + dy * dy;
+  let t = l2 ? ((ax - x1) * dx + (ay - y1) * dy) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(ax - (x1 + t * dx), ay - (y1 + t * dy));
+}
+
+// 터치한 곳에 있는 치수선 부분 찾기. 두툼한 손가락을 위해 판정 범위를 넉넉하게 잡는다.
+function hitTestDim(pos) {
+  let best = null, bestScore = Infinity;
+
+  // 1) 끝점 (선택된 치수선은 반경 30px, 아닌 것은 16px — 화면 기준)
+  for (const d of dims) {
+    const sel = d.id === selectedDimId;
+    const rEnd = px(sel ? 30 : 16);
+    [['end1', d.x1, d.y1], ['end2', d.x2, d.y2]].forEach(item => {
+      const dist = Math.hypot(pos.x - item[1], pos.y - item[2]);
+      if (dist <= rEnd) {
+        const score = dist * (sel ? 0.6 : 1);
+        if (score < bestScore) { bestScore = score; best = { dim: d, part: item[0] }; }
+      }
+    });
+  }
+  if (best) return best;
+
+  // 2) 선 몸통 또는 치수 글자 -> 통째로 이동
+  const hitBody = px(18);
+  for (const d of dims) {
+    const st = dimStyle(d);
+    let dist = segDist(pos.x, pos.y, d.x1, d.y1, d.x2, d.y2);
+    if (d.label) {
+      const g = dimLabelGeom(d, st);
+      const outside = Math.hypot(pos.x - g.lx, pos.y - g.ly) - (st.fontPx * 0.8 + d.label.length * st.fontPx * 0.3);
+      dist = Math.min(dist, Math.max(0, outside));
+    }
+    if (dist <= hitBody) {
+      const score = dist * (d.id === selectedDimId ? 0.6 : 1);
+      if (score < bestScore) { bestScore = score; best = { dim: d, part: 'move' }; }
+    }
+  }
+  return best;
+}
+
+function onDimDown(e, pos) {
+  const pt = getClientPoint(e);
+  const hit = hitTestDim(pos);
+  isDrawing = true;
+  hideDimBar();
+  saveHistory(true);   // 치수선만 바뀌는 작업: 그림 레이어는 다시 저장하지 않는다
+
+  if (hit) {
+    const d = hit.dim;
+    selectedDimId = d.id;
+    dimDrag = { mode: hit.part, dim: d, sx: pos.x, sy: pos.y, moved: false, orig: { x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 } };
+    if (hit.part === 'end1') showLoupe(d.x1, d.y1, pt);
+    else if (hit.part === 'end2') showLoupe(d.x2, d.y2, pt);
+  } else {
+    const d = newDim(pos.x, pos.y);
+    dims.push(d);
+    selectedDimId = d.id;
+    dimDrag = { mode: 'create', dim: d, sx: pos.x, sy: pos.y, moved: false, orig: null };
+    showLoupe(pos.x, pos.y, pt);
+  }
+  renderDims();
+}
+
+function onDimMove(e, pos) {
+  const dr = dimDrag;
+  if (!dr) return;
+  const d = dr.dim;
+  const pt = getClientPoint(e);
+  const dx = pos.x - dr.sx, dy = pos.y - dr.sy;
+  if (!dr.moved && Math.hypot(dx, dy) > px(4)) dr.moved = true;
+
+  if (dr.mode === 'create') {
+    const end = snapAxis(d.x1, d.y1, clampX(pos.x), clampY(pos.y));
+    d.x2 = end.x; d.y2 = end.y;
+    showLoupe(d.x2, d.y2, pt);
+  } else if (dr.mode === 'end1' || dr.mode === 'end2') {
+    // 처음 잡은 위치와 손가락의 차이만큼만 움직인다 (잡는 순간 끝점이 튀지 않게)
+    const first = dr.mode === 'end1';
+    const fx = first ? dr.orig.x1 : dr.orig.x2, fy = first ? dr.orig.y1 : dr.orig.y2;
+    const ox = first ? d.x2 : d.x1, oy = first ? d.y2 : d.y1;   // 반대쪽(고정된) 끝점
+    const p = snapAxis(ox, oy, clampX(fx + dx), clampY(fy + dy));
+    if (first) { d.x1 = p.x; d.y1 = p.y; } else { d.x2 = p.x; d.y2 = p.y; }
+    showLoupe(p.x, p.y, pt);
+  } else {
+    // 통째로 이동: 사진 밖으로 나가지 않도록 이동량을 제한한다
+    const minX = Math.min(dr.orig.x1, dr.orig.x2), maxX = Math.max(dr.orig.x1, dr.orig.x2);
+    const minY = Math.min(dr.orig.y1, dr.orig.y2), maxY = Math.max(dr.orig.y1, dr.orig.y2);
+    const mdx = Math.max(-minX, Math.min(canvas.width - maxX, dx));
+    const mdy = Math.max(-minY, Math.min(canvas.height - maxY, dy));
+    d.x1 = dr.orig.x1 + mdx; d.y1 = dr.orig.y1 + mdy;
+    d.x2 = dr.orig.x2 + mdx; d.y2 = dr.orig.y2 + mdy;
+  }
+  renderDims();
+}
+
+function onDimUp(e) {
+  const dr = dimDrag;
+  dimDrag = null;
+  hideLoupe();
+  if (!dr) return;
+  const d = dr.dim;
+
+  if (dr.mode === 'create') {
+    // 너무 짧게 찍었으면 취소 (빈 곳을 톡 누르면 선택 해제 역할)
+    if (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) < px(12)) {
+      dims = dims.filter(x => x !== d);
+      selectedDimId = null;
+      history.pop();
+      setStatus('드래그해서 치수선을 그려주세요 (이미 그린 선은 끝점·선을 잡으면 수정돼요)');
+      updateDimUI();
+      return;
+    }
+    activeDim = d;
+    activeDimIsNew = true;
+    popupMode = 'dimension';
+    renderDims();
+    showTextPopup(getClientPoint(e));
+    return;
+  }
+
+  if (!dr.moved) history.pop();   // 선택만 했으면 취소 기록은 남기지 않는다
+  updateDimUI();
+}
+
+// ----- 선택 바 -----
+const dimBar = document.getElementById('dimBar');
+
+function showDimBar(d) {
+  dimBar.classList.add('show');
+  // 선택한 치수선이 화면 아래쪽이면 바를 위로 올려 가리지 않게 한다
+  dimBar.classList.toggle('top', ((d.y1 + d.y2) / 2) > canvas.height * 0.5);
+}
+function hideDimBar() { dimBar.classList.remove('show'); }
+
+function updateDimUI() {
+  renderDims();
+  const d = getSelectedDim();
+  if (d && currentTool === 'dimension' && !dimDrag && popupMode !== 'dimension') showDimBar(d);
+  else hideDimBar();
+}
+
+function deleteSelectedDim() {
+  if (!getSelectedDim()) return;
+  saveHistory(true);
+  dims = dims.filter(d => d.id !== selectedDimId);
+  selectedDimId = null;
+  updateDimUI();
+  setStatus('치수선 삭제됨');
+}
+
+function canvasToClient(x, y) {
+  const r = canvas.getBoundingClientRect();
+  return { clientX: r.left + x * r.width / canvas.width, clientY: r.top + y * r.height / canvas.height };
+}
+
+// 버튼을 꾹 누르고 있으면 반복 실행 (길이/크기를 많이 바꿀 때 편하게)
+function holdRepeat(btn, fn) {
+  let t1 = null, t2 = null;
+  const stop = () => { clearTimeout(t1); clearInterval(t2); t1 = null; t2 = null; };
+  btn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const d = getSelectedDim();
+    if (!d) return;
+    stop();
+    saveHistory(true);   // 꾹 누르는 동안은 한 번만 기록 -> 취소 한 번에 되돌아간다
+    fn(d);
+    t1 = setTimeout(() => {
+      t2 = setInterval(() => {
+        const dd = getSelectedDim();
+        if (dd) fn(dd); else stop();
+      }, 90);
+    }, 350);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, stop));
+}
+
+function scaleDimLength(d, k) {
+  const mx = (d.x1 + d.x2) / 2, my = (d.y1 + d.y2) / 2;
+  const len = Math.hypot(d.x2 - d.x1, d.y2 - d.y1);
+  if (k < 1 && len * k < px(12)) return;   // 너무 짧아지지 않게
+  d.x1 = clampX(mx + (d.x1 - mx) * k); d.y1 = clampY(my + (d.y1 - my) * k);
+  d.x2 = clampX(mx + (d.x2 - mx) * k); d.y2 = clampY(my + (d.y2 - my) * k);
+  renderDims();
+}
+
+function scaleDimSize(d, k) {
+  d.k = Math.max(0.4, Math.min(5, d.k * k));
+  renderDims();
+}
+
+holdRepeat(document.getElementById('dimLenMinus'), d => scaleDimLength(d, 0.92));
+holdRepeat(document.getElementById('dimLenPlus'), d => scaleDimLength(d, 1.08));
+holdRepeat(document.getElementById('dimSizeMinus'), d => scaleDimSize(d, 0.88));
+holdRepeat(document.getElementById('dimSizePlus'), d => scaleDimSize(d, 1.14));
+
+document.getElementById('dimEdit').addEventListener('click', () => {
+  const d = getSelectedDim();
+  if (!d) return;
+  activeDim = d;
+  activeDimIsNew = false;
+  popupMode = 'dimension';
+  showTextPopup(canvasToClient((d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2), d.label);
+});
+document.getElementById('dimDelete').addEventListener('click', deleteSelectedDim);
+document.getElementById('dimDone').addEventListener('click', () => {
+  selectedDimId = null;
+  updateDimUI();
+});
+
+// 키보드 Delete/Backspace 로도 선택한 치수선 삭제 (PC)
+document.addEventListener('keydown', e => {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && currentTool === 'dimension' && getSelectedDim()
+      && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
+    e.preventDefault();
+    deleteSelectedDim();
+  }
+});
+
+// ----- 확대경 (끝점을 드래그하는 동안 손가락 위쪽에 3배 확대 화면 표시) -----
+const loupe = document.getElementById('loupe');
+const loupeCtx = loupe.getContext('2d');
+const LOUPE_CSS = 120;
+const LOUPE_ZOOM = 3;
+
+function showLoupe(cx, cy, pt) {
+  const S = loupe.width;
+  const srcSide = px(LOUPE_CSS / LOUPE_ZOOM);   // 확대해서 보여줄 원본 영역 (화면 기준 40px)
+  const sx = cx - srcSide / 2, sy = cy - srcSide / 2;
+
+  loupeCtx.save();
+  loupeCtx.fillStyle = '#000';
+  loupeCtx.fillRect(0, 0, S, S);
+  [baseCanvas, canvas, dimCanvas].forEach(src => {
+    loupeCtx.drawImage(src, sx, sy, srcSide, srcSide, 0, 0, S, S);
+  });
+  // 중심 십자선
+  const m = S / 2;
+  loupeCtx.beginPath();
+  loupeCtx.moveTo(m - 30, m); loupeCtx.lineTo(m - 7, m);
+  loupeCtx.moveTo(m + 7, m); loupeCtx.lineTo(m + 30, m);
+  loupeCtx.moveTo(m, m - 30); loupeCtx.lineTo(m, m - 7);
+  loupeCtx.moveTo(m, m + 7); loupeCtx.lineTo(m, m + 30);
+  loupeCtx.lineWidth = 4;
+  loupeCtx.strokeStyle = 'rgba(0,0,0,0.7)';
+  loupeCtx.stroke();
+  loupeCtx.lineWidth = 1.6;
+  loupeCtx.strokeStyle = '#ffffff';
+  loupeCtx.stroke();
+  loupeCtx.restore();
+
+  // 손가락에 가리지 않게 위쪽에 띄우고, 위 공간이 없으면 아래쪽에 띄운다
+  const left = Math.max(4, Math.min(window.innerWidth - LOUPE_CSS - 4, pt.clientX - LOUPE_CSS / 2));
+  let top = pt.clientY - LOUPE_CSS - 70;
+  if (top < 4) top = pt.clientY + 70;
+  loupe.style.left = left + 'px';
+  loupe.style.top = top + 'px';
+  loupe.style.display = 'block';
+}
+
+function hideLoupe() { loupe.style.display = 'none'; }
+
 // 텍스트 / 치수 입력 팝업
 const textPopup = document.getElementById('textPopup');
 const textInput = document.getElementById('textInput');
 const dimUnit = document.getElementById('dimUnit');
 const textPopupTitle = document.getElementById('textPopupTitle');
 let popupMode = 'text';   // 'text' | 'dimension'
-let pendingDim = null;    // 입력 대기 중인 치수선 좌표
 
-function showTextPopup(e) {
+function showTextPopup(e, prefill) {
   const pt = getClientPoint(e);
   const isDim = popupMode === 'dimension';
+  if (isDim) hideDimBar();
   textPopup.classList.toggle('dim', isDim);
   textPopupTitle.textContent = isDim ? '📐 치수를 입력하세요 (숫자만 입력하면 선택한 단위가 붙어요)' : '';
   textInput.placeholder = isDim ? '예: 2400' : '텍스트를 입력하세요...';
   textInput.inputMode = isDim ? 'decimal' : 'text';
   textInput.maxLength = isDim ? 20 : 50;
   textInput.value = '';
+  if (isDim && prefill) {
+    // 기존 치수값을 고칠 때: "2400mm" 이면 숫자와 단위를 나눠서 채워준다
+    const m = /^([0-9]+(?:[.,][0-9]+)?)(mm|cm|m)?$/.exec(prefill);
+    if (m) { textInput.value = m[1]; dimUnit.value = m[2] || ''; }
+    else textInput.value = prefill;
+  }
   textPopup.classList.add('show');
 
   // 화면 안에 들어오도록, 모바일 키보드에 가리지 않도록 위치를 잡는다
@@ -968,15 +1379,17 @@ function showTextPopup(e) {
 function closeTextPopup() {
   textPopup.classList.remove('show', 'dim');
   pendingTextPos = null;
-  pendingDim = null;
+  activeDim = null;
+  activeDimIsNew = false;
   popupMode = 'text';
+  updateDimUI();
 }
 
 document.getElementById('btnTextConfirm').addEventListener('click', confirmText);
 document.getElementById('btnTextCancel').addEventListener('click', () => {
-  const wasDim = popupMode === 'dimension';
+  const wasNewDim = popupMode === 'dimension' && activeDimIsNew;
   closeTextPopup();
-  if (wasDim) undo();   // 치수 입력을 취소하면 방금 그린 치수선도 함께 지운다
+  if (wasNewDim) undo();   // 새 치수선의 입력을 취소하면 방금 그린 치수선도 함께 지운다
 });
 textInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmText(); });
 
@@ -1001,17 +1414,22 @@ function confirmText() {
 }
 
 function confirmDimension() {
-  const d = pendingDim;
+  const d = activeDim;
+  const isNew = activeDimIsNew;
   const raw = textInput.value.trim();
   const unit = dimUnit.value;
   closeTextPopup();
-  if (!d) return;
-  if (!raw) { setStatus('치수선 추가됨 (치수 입력 없음)'); return; }
+  if (!d || !dims.includes(d)) return;
   // 숫자만 입력했으면 선택한 단위를 붙이고, 직접 단위까지 썼으면 그대로 쓴다
   const isNumber = /^[0-9]+([.,][0-9]+)?$/.test(raw);
-  const label = isNumber ? raw + unit : raw;
-  drawDimensionLabel(label, d.x1, d.y1, d.x2, d.y2);
-  setStatus('치수 추가됨: ' + label);
+  const label = raw ? (isNumber ? raw + unit : raw) : '';
+  if (!isNew) {
+    if (label === d.label) return;
+    saveHistory(true);   // 새로 그린 경우는 만들 때 이미 기록했으므로 한 번에 취소된다
+  }
+  d.label = label;
+  updateDimUI();
+  setStatus(label ? '치수 입력됨: ' + label : '치수값 없음');
 }
 
 // 저장 (사진+그림을 합쳐서 저장)
