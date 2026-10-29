@@ -129,18 +129,26 @@
 
   /* 텍스트 입력 팝업 */
   .text-popup {
-    display: none; position: absolute; z-index: 200;
+    display: none; position: fixed; z-index: 200;
     background: #16213e; border: 1px solid #e94560;
     border-radius: 10px; padding: 12px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.6);
     min-width: 220px;
   }
   .text-popup.show { display: block; }
+  .text-popup .popup-title { display: none; font-size: 0.75rem; color: #aaa; margin-bottom: 8px; line-height: 1.4; }
+  .text-popup.dim .popup-title { display: block; }
+  .text-popup .text-row { display: flex; gap: 6px; margin-bottom: 8px; }
   .text-popup input {
-    width: 100%; background: #0f3460; border: 1px solid #555;
+    flex: 1; min-width: 0; background: #0f3460; border: 1px solid #555;
     color: #eee; border-radius: 6px; padding: 6px 8px;
-    font-size: 0.9rem; margin-bottom: 8px; outline: none;
+    font-size: 16px; outline: none;
   }
+  .text-popup select {
+    display: none; background: #0f3460; border: 1px solid #555; color: #eee;
+    border-radius: 6px; padding: 0 6px; font-size: 16px; outline: none;
+  }
+  .text-popup.dim select { display: block; }
   .text-popup-btns { display: flex; gap: 6px; }
   .text-popup-btns button {
     flex: 1; padding: 6px; border: none; border-radius: 6px;
@@ -160,17 +168,19 @@
   /* 캔버스 래퍼: 사진(baseCanvas)과 그림(mainCanvas)을 겹쳐서 표시 */
   #canvasWrapper {
     position: relative;
+    flex: none;
     display: none;
     box-shadow: 0 0 30px rgba(0,0,0,0.5);
   }
   #baseCanvas, #mainCanvas {
     display: block;
-    max-width: 100%;
-    max-height: 100%;
+    max-width: none;
+    max-height: none;
   }
   #mainCanvas {
     position: absolute;
     top: 0; left: 0;
+    touch-action: none;
     cursor: crosshair;
   }
 
@@ -278,6 +288,7 @@
         <button class="tool-btn active" id="btnPen" title="펜">✏️ 펜</button>
         <button class="tool-btn" id="btnLine" title="직선">📏 선</button>
         <button class="tool-btn" id="btnArrow" title="화살표">➡️ 화살</button>
+        <button class="tool-btn" id="btnDim" title="치수선 (양쪽 화살표 + 치수 입력)">📐 치수</button>
         <button class="tool-btn" id="btnRect" title="사각형">⬜ 사각</button>
         <button class="tool-btn" id="btnCircle" title="원">⭕ 원</button>
         <button class="tool-btn" id="btnText" title="텍스트">🔤 텍스트</button>
@@ -325,7 +336,16 @@
 
     <!-- 텍스트 팝업 -->
     <div class="text-popup" id="textPopup">
-      <input type="text" id="textInput" placeholder="텍스트를 입력하세요..." maxlength="50">
+      <div class="popup-title" id="textPopupTitle"></div>
+      <div class="text-row">
+        <input type="text" id="textInput" placeholder="텍스트를 입력하세요..." maxlength="50">
+        <select id="dimUnit">
+          <option value="mm" selected>mm</option>
+          <option value="cm">cm</option>
+          <option value="m">m</option>
+          <option value="">단위없음</option>
+        </select>
+      </div>
       <div class="text-popup-btns">
         <button class="btn-confirm" id="btnTextConfirm">추가</button>
         <button class="btn-cancel-text" id="btnTextCancel">취소</button>
@@ -406,32 +426,86 @@ const canvasWrapper = document.getElementById('canvasWrapper');
 const placeholder = document.getElementById('placeholder');
 const canvasContainer = document.getElementById('canvasContainer');
 
-// Firestore 문서는 1개당 약 1MB 제한이 있다. 카메라로 찍은 고화질 사진은
-// 압축해도 이 한도를 넘기기 쉬우므로, 용량이 넘으면 화질/크기를 단계적으로 줄여서
-// 저장용 데이터를 안전한 범위로 맞춘다.
+// ===== 해상도 / 좌표 보조 =====
+// 편집용 캔버스는 원본 사진 해상도(긴 변 최대 MAX_DIM px)로 만들고,
+// 화면에는 CSS 크기만 줄여서 보여준다. -> 저장/다운로드/공유 이미지가 화면 크기로 뭉개지지 않는다.
+const MAX_DIM = 2400;
+
+// 화면(CSS px) 1px 이 캔버스 몇 px 에 해당하는지
+function scaleFactor() {
+  const r = canvas.getBoundingClientRect();
+  return r.width ? canvas.width / r.width : 1;
+}
+// 화면에서 보이는 굵기/글자 크기를 캔버스 px 로 환산
+function px(v) { return v * scaleFactor(); }
+
+function fitCanvasDisplay() {
+  if (!baseImage || !baseCanvas.width) return;
+  const maxW = Math.max(50, canvasContainer.clientWidth - 20);
+  const maxH = Math.max(50, canvasContainer.clientHeight - 20);
+  const ratio = Math.min(maxW / baseCanvas.width, maxH / baseCanvas.height, 1);
+  const cssW = Math.round(baseCanvas.width * ratio);
+  const cssH = Math.round(baseCanvas.height * ratio);
+  [canvasWrapper, baseCanvas, canvas].forEach(el => {
+    el.style.width = cssW + 'px';
+    el.style.height = cssH + 'px';
+  });
+}
+// 모바일 키보드가 올라올 때(높이만 변할 때)는 다시 맞추지 않고, 가로 폭이 바뀔 때(회전 등)만 맞춘다
+let lastInnerW = window.innerWidth;
+window.addEventListener('resize', () => {
+  if (window.innerWidth !== lastInnerW) {
+    lastInnerW = window.innerWidth;
+    fitCanvasDisplay();
+  }
+});
+
+// 도형 미리보기용 스냅샷 (드래그 중 매번 이전 상태로 되돌린 뒤 다시 그린다)
+const shapeSnap = document.createElement('canvas');
+function takeSnapshot() {
+  shapeSnap.width = canvas.width;
+  shapeSnap.height = canvas.height;
+  shapeSnap.getContext('2d').drawImage(canvas, 0, 0);
+}
+function restoreSnapshot() {
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(shapeSnap, 0, 0);
+}
+
+// 마우스/터치(touchend 포함) 이벤트에서 화면 좌표를 꺼낸다
+function getClientPoint(e) {
+  const t = (e.changedTouches && e.changedTouches[0]) || (e.touches && e.touches[0]) || e;
+  return { clientX: t.clientX, clientY: t.clientY };
+}
+
+// 치수선이 거의 수평/수직이면(약 6도 이내) 정확히 수평/수직으로 맞춰준다
+function snapAxis(x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  if (Math.abs(dy) < Math.abs(dx) * 0.1) return { x: x2, y: y1 };
+  if (Math.abs(dx) < Math.abs(dy) * 0.1) return { x: x1, y: y2 };
+  return { x: x2, y: y2 };
+}
+
+// Firestore 문서는 1개당 약 1MB 제한이 있다. 저장용 사본은 긴 변 1600px 이하로 줄이고
+// 화질(JPEG) -> 크기 순으로 단계적으로 낮춰 maxBytes 이하로 맞춘다.
+// (편집 중인 원본 해상도와 다운로드/공유 이미지는 영향을 받지 않는다)
 function canvasToDataURLUnderLimit(sourceCanvas, maxBytes) {
-  let quality = 0.75;
-  let workCanvas = sourceCanvas;
-  let dataUrl = workCanvas.toDataURL('image/jpeg', quality);
-
-  // 1단계: 화질을 낮춰본다
-  while (dataUrl.length * 0.75 > maxBytes && quality > 0.25) {
-    quality -= 0.1;
-    dataUrl = workCanvas.toDataURL('image/jpeg', quality);
+  let scale = Math.min(1, 1600 / Math.max(sourceCanvas.width, sourceCanvas.height));
+  let dataUrl = '';
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(sourceCanvas.width * scale));
+    c.height = Math.max(1, Math.round(sourceCanvas.height * scale));
+    const cctx = c.getContext('2d');
+    cctx.imageSmoothingQuality = 'high';
+    cctx.drawImage(sourceCanvas, 0, 0, c.width, c.height);
+    for (let q = 0.85; q >= 0.5; q -= 0.1) {
+      dataUrl = c.toDataURL('image/jpeg', q);
+      if (dataUrl.length * 0.75 <= maxBytes) return dataUrl;
+    }
+    scale *= 0.8;
   }
-
-  // 2단계: 그래도 크면 이미지 크기 자체를 줄인다
-  let scale = 1;
-  while (dataUrl.length * 0.75 > maxBytes && scale > 0.3) {
-    scale -= 0.15;
-    const scaled = document.createElement('canvas');
-    scaled.width = Math.max(1, Math.round(sourceCanvas.width * scale));
-    scaled.height = Math.max(1, Math.round(sourceCanvas.height * scale));
-    scaled.getContext('2d').drawImage(sourceCanvas, 0, 0, scaled.width, scaled.height);
-    workCanvas = scaled;
-    dataUrl = workCanvas.toDataURL('image/jpeg', 0.6);
-  }
-
   return dataUrl;
 }
 
@@ -481,6 +555,7 @@ const toolBtns = {
   pen: document.getElementById('btnPen'),
   line: document.getElementById('btnLine'),
   arrow: document.getElementById('btnArrow'),
+  dimension: document.getElementById('btnDim'),
   rect: document.getElementById('btnRect'),
   circle: document.getElementById('btnCircle'),
   text: document.getElementById('btnText'),
@@ -494,6 +569,7 @@ function selectTool(tool) {
   toolBtns[tool].classList.add('active');
   canvas.style.cursor = tool === 'eraser' ? 'cell' : (tool === 'text' || tool === 'emoji') ? 'pointer' : 'crosshair';
   emojiPalette.classList.remove('show');
+  if (tool === 'dimension') setStatus('드래그해서 치수선을 그리면 숫자 입력창이 떠요');
 }
 
 Object.keys(toolBtns).forEach(k => {
@@ -530,6 +606,7 @@ function selectEmoji(em) {
 // 실행 취소 (그림 레이어의 직전 상태로 정확히 1단계만 되돌림)
 document.getElementById('btnUndo').addEventListener('click', undo);
 function undo() {
+  if (popupMode === 'dimension') closeTextPopup();
   if (history.length === 0) return;
   const prevState = history.pop();
   const img = new Image();
@@ -543,7 +620,8 @@ function undo() {
 // 단축키 Ctrl+Z / Cmd+Z 로도 취소 가능
 document.addEventListener('keydown', e => {
   const isUndoKey = (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z';
-  if (isUndoKey) {
+  // 입력창에 글자를 치는 중에는 입력창 자체의 Ctrl+Z 를 쓰도록 둔다
+  if (isUndoKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
     e.preventDefault();
     undo();
   }
@@ -552,12 +630,13 @@ document.addEventListener('keydown', e => {
 function saveHistory() {
   // 그림(주석) 레이어만 저장한다 - 투명 PNG이므로 사진 위에 겹쳤을 때 그대로 복원됨
   history.push(canvas.toDataURL());
-  if (history.length > 30) history.shift();
+  if (history.length > 20) history.shift();
 }
 
 // 전체 초기화 (사진은 유지, 그림/주석만 지움)
 document.getElementById('btnClear').addEventListener('click', () => {
   if (!baseImage) return;
+  closeTextPopup();
   saveHistory();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   setStatus('초기화됨');
@@ -585,13 +664,16 @@ function loadImageFile(file) {
 function loadImageSrc(src) {
   const img = new Image();
   img.onload = () => {
-    const container = canvasContainer;
-    const maxW = container.clientWidth - 20;
-    const maxH = container.clientHeight - 20;
-    let w = img.width, h = img.height;
-    const ratio = Math.min(maxW / w, maxH / h, 1);
-    w = Math.round(w * ratio);
-    h = Math.round(h * ratio);
+    closeTextPopup();
+    // 화면 크기가 아니라 원본 해상도(최대 MAX_DIM)로 캔버스를 만든다
+    let w = img.naturalWidth || img.width;
+    let h = img.naturalHeight || img.height;
+    const longest = Math.max(w, h);
+    if (longest > MAX_DIM) {
+      const r = MAX_DIM / longest;
+      w = Math.round(w * r);
+      h = Math.round(h * r);
+    }
     baseCanvas.width = w;
     baseCanvas.height = h;
     canvas.width = w;
@@ -599,15 +681,18 @@ function loadImageSrc(src) {
     baseImage = img;
     history = [];
     drawBase();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(0, 0, w, h);
     canvasWrapper.style.display = 'block';
     placeholder.style.display = 'none';
-    setStatus('사진 로드 완료 - 그리기 시작!');
+    fitCanvasDisplay();
+    setStatus(`사진 로드 완료 (${w}×${h}) - 그리기 시작!`);
   };
   img.src = src;
 }
 
 function drawBase() {
+  baseCtx.imageSmoothingEnabled = true;
+  baseCtx.imageSmoothingQuality = 'high';
   baseCtx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
   if (baseImage) baseCtx.drawImage(baseImage, 0, 0, baseCanvas.width, baseCanvas.height);
 }
@@ -638,15 +723,25 @@ canvas.addEventListener('mousemove', onMove);
 canvas.addEventListener('touchmove', e => { e.preventDefault(); onMove(e); }, { passive: false });
 
 canvas.addEventListener('mouseup', onUp);
+// 캔버스 밖에서 마우스를 놓아도 그리기가 끝나도록 window 에도 등록 (onUp 이 중복 호출을 막아준다)
+window.addEventListener('mouseup', onUp);
 canvas.addEventListener('touchend', e => { e.preventDefault(); onUp(e); }, { passive: false });
 
 function onDown(e) {
   if (!baseImage) return;
+
+  // 치수 입력창이 열려 있으면 먼저 확정하고, 이번 터치는 무시한다
+  if (textPopup.classList.contains('show')) {
+    if (popupMode === 'dimension') { confirmText(); return; }
+    closeTextPopup();
+  }
+
   const pos = getPos(e);
   startX = pos.x; startY = pos.y;
 
   if (currentTool === 'text') {
     pendingTextPos = pos;
+    popupMode = 'text';
     showTextPopup(e);
     return;
   }
@@ -662,17 +757,17 @@ function onDown(e) {
   if (currentTool === 'pen' || currentTool === 'eraser') {
     ctx.beginPath();
     ctx.moveTo(pos.x, pos.y);
-    ctx.lineWidth = currentTool === 'eraser' ? currentSize * 3 : currentSize;
-    // 지우개는 색상 대신 destination-out으로 그림 레이어의 픽셀 자체를 투명하게 지운다
-    // -> 아래 있는 baseCanvas(원본 사진)가 그대로 드러남 (덧칠이 아니라 실제 지우기)
+    ctx.lineWidth = px(currentTool === 'eraser' ? currentSize * 3 : currentSize);
+    // 지우개는 destination-out 으로 그림 레이어의 픽셀 자체를 투명하게 지운다
     ctx.strokeStyle = currentTool === 'eraser' ? 'rgba(0,0,0,1)' : currentColor;
     ctx.globalCompositeOperation = currentTool === 'eraser' ? 'destination-out' : 'source-over';
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+  } else {
+    takeSnapshot();
   }
 }
 
-let snapshotBeforeShape = null;
 function onMove(e) {
   if (!isDrawing) return;
   const pos = getPos(e);
@@ -680,41 +775,55 @@ function onMove(e) {
   if (currentTool === 'pen' || currentTool === 'eraser') {
     ctx.lineTo(pos.x, pos.y);
     ctx.stroke();
+    // 매번 전체 경로를 다시 칠하지 않도록 경로를 끊고 이어 그린다 (고해상도에서도 부드럽게)
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
     return;
   }
 
-  // 도형: 직전 상태로 되돌린 뒤 미리보기 도형을 다시 그린다 (잔상 방지를 위해 clear 후 로드 완료를 기다림)
-  if (!snapshotBeforeShape) {
-    snapshotBeforeShape = history[history.length - 1];
-  }
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (snapshotBeforeShape) {
-    const img2 = new Image();
-    img2.onload = () => {
-      ctx.drawImage(img2, 0, 0);
-      drawShape(currentTool, startX, startY, pos.x, pos.y);
-    };
-    img2.src = snapshotBeforeShape;
-  } else {
-    drawShape(currentTool, startX, startY, pos.x, pos.y);
-  }
+  restoreSnapshot();
+  let end = pos;
+  if (currentTool === 'dimension') end = snapAxis(startX, startY, pos.x, pos.y);
+  drawShape(currentTool, startX, startY, end.x, end.y);
 }
 
 function onUp(e) {
   if (!isDrawing) return;
   isDrawing = false;
-  snapshotBeforeShape = null;
   ctx.globalCompositeOperation = 'source-over';
-  const pos = getPos(e.changedTouches ? { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY } : e);
-  if (currentTool !== 'pen' && currentTool !== 'eraser') {
-    drawShape(currentTool, startX, startY, pos.x, pos.y);
+
+  if (currentTool === 'pen' || currentTool === 'eraser') {
+    ctx.beginPath();
+    return;
+  }
+
+  const pt = getClientPoint(e);
+  const pos = getPos(pt);
+  let end = pos;
+  if (currentTool === 'dimension') end = snapAxis(startX, startY, pos.x, pos.y);
+
+  // 너무 짧게 찍은 치수선은 취소한다
+  if (currentTool === 'dimension' && Math.hypot(end.x - startX, end.y - startY) < px(12)) {
+    restoreSnapshot();
+    history.pop();
+    setStatus('드래그해서 치수선을 그려주세요');
+    return;
+  }
+
+  restoreSnapshot();
+  drawShape(currentTool, startX, startY, end.x, end.y);
+
+  if (currentTool === 'dimension') {
+    pendingDim = { x1: startX, y1: startY, x2: end.x, y2: end.y };
+    popupMode = 'dimension';
+    showTextPopup(pt);
   }
 }
 
 function drawShape(tool, x1, y1, x2, y2) {
   ctx.globalCompositeOperation = 'source-over';
   ctx.strokeStyle = currentColor;
-  ctx.lineWidth = currentSize;
+  ctx.lineWidth = px(currentSize);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.fillStyle = currentColor;
@@ -726,6 +835,8 @@ function drawShape(tool, x1, y1, x2, y2) {
     ctx.stroke();
   } else if (tool === 'arrow') {
     drawArrow(x1, y1, x2, y2);
+  } else if (tool === 'dimension') {
+    drawDimensionLine(x1, y1, x2, y2);
   } else if (tool === 'rect') {
     ctx.beginPath();
     ctx.rect(x1, y1, x2 - x1, y2 - y1);
@@ -739,7 +850,7 @@ function drawShape(tool, x1, y1, x2, y2) {
 }
 
 function drawArrow(x1, y1, x2, y2) {
-  const headlen = Math.max(15, currentSize * 3);
+  const headlen = px(Math.max(15, currentSize * 3));
   const angle = Math.atan2(y2 - y1, x2 - x1);
   ctx.beginPath();
   ctx.moveTo(x1, y1);
@@ -753,8 +864,68 @@ function drawArrow(x1, y1, x2, y2) {
   ctx.stroke();
 }
 
+// 속이 채워진 화살촉. (x, y) 가 뾰족한 끝, dir 은 화살이 향하는 방향
+function fillArrowHead(x, y, dir, size) {
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x - size * Math.cos(dir - Math.PI / 7), y - size * Math.sin(dir - Math.PI / 7));
+  ctx.lineTo(x - size * Math.cos(dir + Math.PI / 7), y - size * Math.sin(dir + Math.PI / 7));
+  ctx.closePath();
+  ctx.fill();
+}
+
+// 치수선: 본선 + 양쪽 끝 화살촉 + 양쪽 끝 수직 보조선
+function drawDimensionLine(x1, y1, x2, y2) {
+  const len = Math.hypot(x2 - x1, y2 - y1);
+  if (len < 1) return;
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const head = Math.min(px(Math.max(14, currentSize * 3.5)), len / 2.5);
+  const tick = px(Math.max(10, currentSize * 3));
+  const nx = -Math.sin(angle), ny = Math.cos(angle);
+
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  fillArrowHead(x2, y2, angle, head);
+  fillArrowHead(x1, y1, angle + Math.PI, head);
+
+  ctx.beginPath();
+  ctx.moveTo(x1 - nx * tick, y1 - ny * tick);
+  ctx.lineTo(x1 + nx * tick, y1 + ny * tick);
+  ctx.moveTo(x2 - nx * tick, y2 - ny * tick);
+  ctx.lineTo(x2 + nx * tick, y2 + ny * tick);
+  ctx.stroke();
+}
+
+// 치수 글자: 선 가운데 위쪽에, 선 방향에 맞춰 기울여서 (글자가 뒤집히지 않게) 표시
+function drawDimensionLabel(label, x1, y1, x2, y2) {
+  let angle = Math.atan2(y2 - y1, x2 - x1);
+  if (angle > Math.PI / 2 - 0.001 || angle < -Math.PI / 2 - 0.001) angle += Math.PI;
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  const fontPx = px(Math.max(14, currentSize * 2.5 + 10));
+  const pad = fontPx * 0.25;
+  const gap = px(4) + px(currentSize) / 2;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.translate(mx, my);
+  ctx.rotate(angle);
+  ctx.font = `bold ${fontPx}px 'Segoe UI', sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const tw = ctx.measureText(label).width;
+  const cy = -(gap + pad + fontPx / 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(-tw / 2 - pad, cy - fontPx / 2 - pad, tw + pad * 2, fontPx + pad * 2);
+  ctx.fillStyle = currentColor;
+  ctx.fillText(label, 0, cy);
+  ctx.restore();
+}
+
 function drawEmoji(emoji, x, y) {
-  const size = Math.max(24, currentSize * 8);
+  const size = px(Math.max(24, currentSize * 8));
   ctx.font = `${size}px serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -762,53 +933,85 @@ function drawEmoji(emoji, x, y) {
   ctx.fillText(emoji, x, y);
 }
 
-// 텍스트 팝업
+// 텍스트 / 치수 입력 팝업
 const textPopup = document.getElementById('textPopup');
 const textInput = document.getElementById('textInput');
+const dimUnit = document.getElementById('dimUnit');
+const textPopupTitle = document.getElementById('textPopupTitle');
+let popupMode = 'text';   // 'text' | 'dimension'
+let pendingDim = null;    // 입력 대기 중인 치수선 좌표
 
 function showTextPopup(e) {
-  const containerRect = canvasContainer.getBoundingClientRect();
-  const touch = e.touches ? e.touches[0] : e;
-  let px = touch.clientX - containerRect.left + 10;
-  let py = touch.clientY - containerRect.top + 10;
-  if (px + 240 > containerRect.width) px = containerRect.width - 250;
-  if (py + 100 > containerRect.height) py = containerRect.height - 110;
-  textPopup.style.left = px + 'px';
-  textPopup.style.top = py + 'px';
-  textPopup.style.position = 'absolute';
-  textPopup.classList.add('show');
+  const pt = getClientPoint(e);
+  const isDim = popupMode === 'dimension';
+  textPopup.classList.toggle('dim', isDim);
+  textPopupTitle.textContent = isDim ? '📐 치수를 입력하세요 (숫자만 입력하면 선택한 단위가 붙어요)' : '';
+  textInput.placeholder = isDim ? '예: 2400' : '텍스트를 입력하세요...';
+  textInput.inputMode = isDim ? 'decimal' : 'text';
+  textInput.maxLength = isDim ? 20 : 50;
   textInput.value = '';
+  textPopup.classList.add('show');
+
+  // 화면 안에 들어오도록, 모바일 키보드에 가리지 않도록 위치를 잡는다
+  const w = textPopup.offsetWidth, h = textPopup.offsetHeight;
+  const left = Math.min(Math.max(8, pt.clientX + 10), window.innerWidth - w - 8);
+  let top = Math.min(pt.clientY + 10, window.innerHeight * 0.4);
+  top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
+  textPopup.style.left = left + 'px';
+  textPopup.style.top = top + 'px';
+
   textInput.focus();
+  // 마우스 클릭 직후에는 브라우저가 포커스를 되돌려 가는 경우가 있어 한 번 더 맞춘다
+  setTimeout(() => textInput.focus(), 50);
+}
+
+function closeTextPopup() {
+  textPopup.classList.remove('show', 'dim');
+  pendingTextPos = null;
+  pendingDim = null;
+  popupMode = 'text';
 }
 
 document.getElementById('btnTextConfirm').addEventListener('click', confirmText);
 document.getElementById('btnTextCancel').addEventListener('click', () => {
-  textPopup.classList.remove('show');
-  pendingTextPos = null;
+  const wasDim = popupMode === 'dimension';
+  closeTextPopup();
+  if (wasDim) undo();   // 치수 입력을 취소하면 방금 그린 치수선도 함께 지운다
 });
 textInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmText(); });
 
 function confirmText() {
+  if (popupMode === 'dimension') { confirmDimension(); return; }
   const txt = textInput.value.trim();
-  if (!txt || !pendingTextPos) { textPopup.classList.remove('show'); return; }
+  if (!txt || !pendingTextPos) { closeTextPopup(); return; }
   saveHistory();
-  const size = fontSizeForText;
+  const size = px(fontSizeForText);
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = currentColor;
   ctx.font = `bold ${size}px 'Segoe UI', sans-serif`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   // 텍스트 배경
   const metrics = ctx.measureText(txt);
-  const tw = metrics.width + 10;
-  const th = size + 8;
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(pendingTextPos.x - 4, pendingTextPos.y - 2, tw, th);
+  ctx.fillRect(pendingTextPos.x - px(4), pendingTextPos.y - px(2), metrics.width + px(10), size + px(8));
   ctx.fillStyle = currentColor;
   ctx.fillText(txt, pendingTextPos.x, pendingTextPos.y);
-  textPopup.classList.remove('show');
-  pendingTextPos = null;
+  closeTextPopup();
   setStatus('텍스트 추가됨');
+}
+
+function confirmDimension() {
+  const d = pendingDim;
+  const raw = textInput.value.trim();
+  const unit = dimUnit.value;
+  closeTextPopup();
+  if (!d) return;
+  if (!raw) { setStatus('치수선 추가됨 (치수 입력 없음)'); return; }
+  // 숫자만 입력했으면 선택한 단위를 붙이고, 직접 단위까지 썼으면 그대로 쓴다
+  const isNumber = /^[0-9]+([.,][0-9]+)?$/.test(raw);
+  const label = isNumber ? raw + unit : raw;
+  drawDimensionLabel(label, d.x1, d.y1, d.x2, d.y2);
+  setStatus('치수 추가됨: ' + label);
 }
 
 // 저장 (사진+그림을 합쳐서 저장)
