@@ -290,7 +290,7 @@
   .toast.show { transform: translateY(0); opacity: 1; }
 
   .mobile-only { display: none; }
-  @media (max-width: 600px) {
+  @media (max-width: 600px), (max-height: 500px) {
     .sidebar { display: none; }
     .sidebar.mobile-open {
       display: flex; position: fixed; inset: 0;
@@ -311,6 +311,19 @@
     header h1 { font-size: 1.05rem; }
     header p { font-size: 0.65rem; }
   }
+  /* 가로로 돌린 폰: 세로 공간이 모자라므로 머리글/툴바/저장줄을 더 줄인다 */
+  @media (max-height: 500px) {
+    header { padding: 2px 10px; }
+    header h1 { font-size: 0.85rem; }
+    header p { font-size: 0; }
+    header #buildTag { font-size: 0.65rem; margin-left: 0; }
+    .toolbar { max-height: 55vh; padding: 3px 6px; gap: 2px; }
+    .tools .tool-btn { min-width: 40px; min-height: 38px; padding: 3px 6px; font-size: 1.05rem; }
+    .tool-btn { padding: 4px 8px; }
+    .color-dot { width: 26px; height: 26px; }
+    .save-bar { padding: 3px 8px; }
+    .save-bar input { padding: 3px 8px; }
+  }
 </style>
 </head>
 <body>
@@ -318,7 +331,7 @@
 <header>
   <div>
     <h1>📸 포토 마크업</h1>
-    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v11 · 10/31 11:40</span></p>
+    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v13 · 10/31 12:30</span></p>
   </div>
 </header>
 
@@ -1990,7 +2003,7 @@ function setStatus(msg) {
 
 // 이모티콘 팔레트 바깥 클릭 닫기
 document.addEventListener('click', e => {
-  if (!emojiPalette.contains(e.target) && e.target !== toolBtns['emoji']) {
+  if (!emojiPalette.contains(e.target) && !toolBtns['emoji'].contains(e.target)) {
     emojiPalette.classList.remove('show');
   }
 });
