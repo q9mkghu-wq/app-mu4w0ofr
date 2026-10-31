@@ -211,6 +211,11 @@
     box-shadow: 0 4px 20px rgba(0,0,0,0.6);
   }
   .dim-bar.show { display: flex; }
+  .dim-bar { flex-wrap: nowrap; gap: 4px; padding: 4px; max-width: 98%; }
+  .dim-bar.dragging { opacity: 0; pointer-events: none; }   /* 끝점을 끄는 동안은 바를 숨겨서 가리지 않게 */
+  .dim-bar button { min-height: 38px; min-width: 34px; padding: 4px 5px; font-size: 0.85rem; white-space: nowrap; }
+  .dim-bar .grp { gap: 2px; }
+  .dim-bar .grp-label { font-size: 0.62rem; }
   .dim-bar.top { bottom: auto; top: 8px; }
   .dim-bar button {
     min-height: 44px; min-width: 44px; padding: 6px 10px;
@@ -331,7 +336,7 @@
 <header>
   <div>
     <h1>📸 포토 마크업</h1>
-    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v14 · 10/31 13:00</span></p>
+    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v15 · 10/31 14:10</span></p>
   </div>
 </header>
 
@@ -445,12 +450,12 @@
       </div>
       <!-- 치수선 편집 바 (치수선을 선택하면 나타남) -->
       <div class="dim-bar" id="dimBar">
-        <button id="dimEdit">✏️ 치수값</button>
+        <button id="dimEdit" title="값 고치기">✏️ 값</button>
         <div class="grp" id="grpLen"><span class="grp-label" id="dimLenLabel">선 길이</span><button id="dimLenMinus">−</button><button id="dimLenPlus">+</button></div>
-        <div class="grp" id="grpSize"><span class="grp-label">굵기·글자</span><button id="dimSizeMinus">−</button><button id="dimSizePlus">+</button></div>
+        <div class="grp" id="grpSize"><span class="grp-label">굵기</span><button id="dimSizeMinus">−</button><button id="dimSizePlus">+</button></div>
         <div class="grp" id="grpEmoji" style="display:none"><span class="grp-label">크기</span><button id="emSizeMinus">−</button><button id="emSizePlus">+</button><span class="grp-label">회전</span><button id="emRotMinus">↺</button><button id="emRotPlus">↻</button></div>
-        <button id="dimDelete" class="danger">🗑️ 삭제</button>
-        <button id="dimDone" class="ok">✔ 완료</button>
+        <button id="dimDelete" class="danger" title="삭제">🗑️</button>
+        <button id="dimDone" class="ok" title="완료">✔</button>
       </div>
       <div class="canvas-placeholder" id="placeholder">
         <div class="icon">🖼️</div>
@@ -1465,6 +1470,7 @@ function onDimMove(e, pos) {
   const pt = getClientPoint(e);
   const dx = pos.x - dr.sx, dy = pos.y - dr.sy;
   if (!dr.moved && Math.hypot(dx, dy) > px(4)) dr.moved = true;
+  if (dr.moved) dimBar.classList.add('dragging');
 
   if (d.type === 'emoji' && dr.mode === 'create') {
     // 이모티콘은 놓는 순간부터 손가락을 따라 움직인다
@@ -1501,6 +1507,7 @@ function onDimMove(e, pos) {
 }
 
 function onDimUp(e) {
+  dimBar.classList.remove('dragging');
   const dr = dimDrag;
   dimDrag = null;
   hideLoupe();
@@ -1555,10 +1562,25 @@ function showDimBar(d) {
   document.getElementById('grpLen').style.display = isEm ? 'none' : '';
   document.getElementById('grpSize').style.display = isEm ? 'none' : '';
   document.getElementById('grpEmoji').style.display = isEm ? '' : 'none';
-  eb.textContent = d.type === 'dim' ? '✏️ 치수값' : (d.type === 'text' ? '✏️ 글자' : '✏️ 문자');
-  document.getElementById('dimLenLabel').textContent = isShape(d) ? '도형 크기' : '선 길이';
+  eb.textContent = d.type === 'dim' ? '✏️ 값' : (d.type === 'text' ? '✏️ 글' : '✏️ 문');
+  document.getElementById('dimLenLabel').textContent = isShape(d) ? '크기' : '길이';
   // 선택한 치수선이 화면 아래쪽이면 바를 위로 올려 가리지 않게 한다
-  dimBar.classList.toggle('top', ((d.y1 + d.y2) / 2) > canvas.height * 0.5);
+  placeDimBar(d);
+}
+// 바가 선택한 물체(양 끝점)를 가리지 않도록, 더 멀리 떨어진 위/아래쪽에 둔다
+function placeDimBar(d) {
+  dimBar.classList.remove('top');
+  const area = dimBar.parentElement.getBoundingClientRect();
+  const cr = canvas.getBoundingClientRect();
+  const k = cr.height / canvas.height;
+  const ys = [d.y1, d.y2].map(v => cr.top + v * k);
+  if (isSzObj(d)) { const b = objBox(d); const r = Math.hypot(b.hw, b.hh); ys[0] = cr.top + (d.y1 - r) * k; ys[1] = cr.top + (d.y1 + r) * k; }
+  const minY = Math.min(ys[0], ys[1]) - 24, maxY = Math.max(ys[0], ys[1]) + 24;
+  const h = dimBar.offsetHeight + 8;
+  // 아래 배치: [area.bottom-h, area.bottom], 위 배치: [area.top, area.top+h]
+  const overlapBottom = Math.max(0, maxY - (area.bottom - h)) - Math.max(0, 0);
+  const overlapTop = Math.max(0, (area.top + h) - minY);
+  dimBar.classList.toggle('top', overlapTop < overlapBottom);
 }
 function hideDimBar() { dimBar.classList.remove('show'); }
 
