@@ -331,7 +331,7 @@
 <header>
   <div>
     <h1>📸 포토 마크업</h1>
-    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v13 · 10/31 12:30</span></p>
+    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v14 · 10/31 13:00</span></p>
   </div>
 </header>
 
@@ -718,7 +718,7 @@ function selectTool(tool) {
   if (tool === 'dimension') setStatus('드래그=새 치수선 / 끝점·선·글자를 잡고 움직이면 수정');
   else if (tool === 'arrow' || tool === 'line') setStatus('드래그=새 ' + (tool === 'arrow' ? '화살표' : '선') + ' / 끝점·몸통을 잡고 움직이면 수정');
   else if (tool === 'rect' || tool === 'circle') setStatus('드래그=새 도형 / 테두리·모서리를 잡으면 이동·크기 조절');
-  else setStatus(({ pen: '✏️ 펜', text: '🔤 텍스트 - 사진을 탭하면 글자 입력', eraser: '🧹 지우개' })[tool] || tool);
+  else setStatus(({ pen: '✏️ 펜', text: '🔤 글자를 놓을 곳을 탭하세요 (이미 놓은 글자는 잡고 이동)', eraser: '🧹 지우개' })[tool] || tool);
   updateDimUI();
 }
 
@@ -1045,7 +1045,7 @@ function getSelectedDim() { return dims.find(d => d.id === selectedDimId) || nul
 
 // 편집 가능한 객체 도구: 치수선(dim), 사각형(rect), 원(circle)
 function isObjTool() {
-  return currentTool === 'dimension' || currentTool === 'rect' || currentTool === 'circle' || currentTool === 'arrow' || currentTool === 'line' || currentTool === 'emoji';
+  return currentTool === 'dimension' || currentTool === 'rect' || currentTool === 'circle' || currentTool === 'arrow' || currentTool === 'line' || currentTool === 'emoji' || currentTool === 'text';
 }
 function toolObjType() {
   return currentTool === 'dimension' ? 'dim' : currentTool;
@@ -1054,6 +1054,11 @@ function isShape(d) { return d.type === 'rect' || d.type === 'circle'; }
 
 function newDim(x, y) {
   const d = { id: ++dimSeq, type: toolObjType(), x1: x, y1: y, x2: x, y2: y, label: '', color: currentColor, cs: currentSize, f: scaleFactor(), k: 1 };
+  if (d.type === 'text') {
+    d.text = '';
+    d.sz = px(fontSizeForText);   // 글자 크기 (캔버스 px)
+    d.rot = 0;
+  }
   if (d.type === 'emoji') {
     d.emoji = selectedEmoji;
     d.sz = px(Math.max(56, currentSize * 8));   // 이모티콘 한 변 크기 (캔버스 px)
@@ -1062,11 +1067,39 @@ function newDim(x, y) {
   return d;
 }
 
-// 이모티콘의 크기·회전 핸들 위치: 오른쪽 위 모서리 바깥쪽
+// 크기·회전을 가지는 객체(이모티콘, 글자) 공통
 const EMOJI_HANDLE = 0.6;
+function isSzObj(d) { return d.type === 'emoji' || d.type === 'text'; }
+const measureCtx = document.createElement('canvas').getContext('2d');
+function textUnitWidth(d) {
+  // 글자 크기 1 일 때의 가로 폭 (크기에 정비례하므로 100px 로 재서 나눈다)
+  measureCtx.font = `bold 100px 'Segoe UI', sans-serif`;
+  return measureCtx.measureText(d.text || '').width / 100;
+}
+// 글자 크기 1 당 상자 반폭(a), 반높이(b). 핸들은 상자의 오른쪽 위 모서리(a, -b)
+function objUnit(d) {
+  if (d.type === 'text') return { a: textUnitWidth(d) / 2 + 0.25, b: 0.85 };
+  return { a: EMOJI_HANDLE, b: EMOJI_HANDLE };
+}
+function objBox(d) { const u = objUnit(d); return { hw: u.a * d.sz, hh: u.b * d.sz }; }
 function emojiHandlePos(d) {
-  const a = EMOJI_HANDLE * d.sz, b = -EMOJI_HANDLE * d.sz;
+  const bx = objBox(d), a = bx.hw, b = -bx.hh;
   return { x: d.x1 + a * Math.cos(d.rot) - b * Math.sin(d.rot), y: d.y1 + a * Math.sin(d.rot) + b * Math.cos(d.rot) };
+}
+function drawTextObject(c, d) {
+  const bx = objBox(d);
+  c.save();
+  c.globalCompositeOperation = 'source-over';
+  c.translate(d.x1, d.y1);
+  c.rotate(d.rot);
+  c.font = `bold ${d.sz}px 'Segoe UI', sans-serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillStyle = 'rgba(0,0,0,0.45)';
+  c.fillRect(-bx.hw, -bx.hh, bx.hw * 2, bx.hh * 2);
+  c.fillStyle = d.color;
+  c.fillText(d.text || '', 0, 0);
+  c.restore();
 }
 function drawEmojiObject(c, d) {
   c.save();
@@ -1181,6 +1214,7 @@ function drawArrowObject(c, d) {
 }
 
 function drawDimObject(c, d) {
+  if (d.type === 'text') { drawTextObject(c, d); return; }
   if (d.type === 'emoji') { drawEmojiObject(c, d); return; }
   if (isShape(d)) { drawShapeObject(c, d); return; }
   if (d.type === 'arrow' || d.type === 'line') { drawArrowObject(c, d); return; }
@@ -1232,17 +1266,17 @@ function drawDimObject(c, d) {
 // 선택된 치수선의 끝점 핸들 (화면 표시용, 저장/공유 이미지에는 들어가지 않는다)
 function drawHandles(c, d) {
   const u = scaleFactor();
-  if (d.type === 'emoji') {
+  if (isSzObj(d)) {
     // 회전한 점선 상자 + 오른쪽 위 핸들 (끌면 크기와 회전이 함께 바뀜)
     const h = emojiHandlePos(d), r = 16 * u;
-    const half = EMOJI_HANDLE * d.sz;   // 상자 반변 길이 (핸들이 상자의 오른쪽 위 모서리에 오도록)
+    const bx = objBox(d);   // 상자 반폭/반높이 (핸들이 상자의 오른쪽 위 모서리에 오도록)
     c.save();
     c.translate(d.x1, d.y1);
     c.rotate(d.rot);
     c.setLineDash([8 * u, 6 * u]);
     c.lineWidth = 2 * u;
     c.strokeStyle = 'rgba(255,212,0,0.95)';
-    c.strokeRect(-half, -half, half * 2, half * 2);
+    c.strokeRect(-bx.hw, -bx.hh, bx.hw * 2, bx.hh * 2);
     c.restore();
     c.save();
     c.beginPath(); c.arc(h.x, h.y, r, 0, Math.PI * 2);
@@ -1298,6 +1332,19 @@ function renderDims() {
   uiCtx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
   const sel = getSelectedDim();
   if (sel && isObjTool()) drawHandles(uiCtx, sel);
+  // 글자 입력 중: 글자가 놓일 위치를 십자 표시로 보여준다
+  if (pendingTextPos && popupMode === 'text' && !editingText) {
+    const u = scaleFactor(), x = pendingTextPos.x, y = pendingTextPos.y, r = 18 * u;
+    uiCtx.save();
+    uiCtx.beginPath(); uiCtx.arc(x, y, r, 0, Math.PI * 2);
+    uiCtx.lineWidth = 5 * u; uiCtx.strokeStyle = 'rgba(0,0,0,0.75)'; uiCtx.stroke();
+    uiCtx.lineWidth = 2.6 * u; uiCtx.strokeStyle = '#ffd400'; uiCtx.stroke();
+    uiCtx.beginPath();
+    uiCtx.moveTo(x - r * 1.5, y); uiCtx.lineTo(x + r * 1.5, y); uiCtx.moveTo(x, y - r * 1.5); uiCtx.lineTo(x, y + r * 1.5);
+    uiCtx.lineWidth = 3.4 * u; uiCtx.strokeStyle = 'rgba(0,0,0,0.75)'; uiCtx.stroke();
+    uiCtx.lineWidth = 1.5 * u; uiCtx.strokeStyle = '#ffffff'; uiCtx.stroke();
+    uiCtx.restore();
+  }
 }
 
 // 점 (ax, ay) 에서 선분까지의 거리
@@ -1316,7 +1363,7 @@ function hitTestDim(pos) {
   // 1) 끝점 (선택된 치수선은 반경 30px, 아닌 것은 16px — 화면 기준)
   for (const d of dims) {
     const sel = d.id === selectedDimId;
-    if (d.type === 'emoji') {
+    if (isSzObj(d)) {
       if (sel) {
         const h = emojiHandlePos(d);
         const dist = Math.hypot(pos.x - h.x, pos.y - h.y);
@@ -1338,9 +1385,13 @@ function hitTestDim(pos) {
   // 2) 선 몸통 또는 치수 글자 -> 통째로 이동
   const hitBody = px(18);
   for (const d of dims) {
-    if (d.type === 'emoji') {
-      // 이모티콘 안쪽 어디를 눌러도 잡힌다
-      const dist = Math.max(0, Math.hypot(pos.x - d.x1, pos.y - d.y1) - d.sz * 0.5);
+    if (isSzObj(d)) {
+      // 이모티콘/글자 상자 안쪽 어디를 눌러도 잡힌다 (회전한 상자 기준)
+      const bx = objBox(d);
+      const cdx = pos.x - d.x1, cdy = pos.y - d.y1;
+      const lx = cdx * Math.cos(-d.rot) - cdy * Math.sin(-d.rot);
+      const ly = cdx * Math.sin(-d.rot) + cdy * Math.cos(-d.rot);
+      const dist = Math.hypot(Math.max(0, Math.abs(lx) - bx.hw * (d.type === 'emoji' ? 0.85 : 1)), Math.max(0, Math.abs(ly) - bx.hh * (d.type === 'emoji' ? 0.85 : 1)));
       if (dist <= hitBody) {
         const score = dist * (d.id === selectedDimId ? 0.6 : 1);
         if (score < bestScore) { bestScore = score; best = { dim: d, part: 'move' }; }
@@ -1376,6 +1427,17 @@ function hitTestDim(pos) {
 function onDimDown(e, pos) {
   const pt = getClientPoint(e);
   const hit = hitTestDim(pos);
+  if (currentTool === 'text' && !hit) {
+    // 빈 곳을 탭: 글자를 입력받는다. 놓일 위치는 십자 표시로 보여준다.
+    selectedDimId = null;
+    pendingTextPos = { x: clampX(pos.x), y: clampY(pos.y) };
+    editingText = null;
+    popupMode = 'text';
+    hideDimBar();
+    showTextPopup(e);
+    renderDims();
+    return;
+  }
   isDrawing = true;
   hideDimBar();
   saveHistory(true);   // 치수선만 바뀌는 작업: 그림 레이어는 다시 저장하지 않는다
@@ -1411,8 +1473,9 @@ function onDimMove(e, pos) {
     // 핸들을 끌면 중심에서 손가락까지의 거리 = 크기, 방향 = 회전
     const vx = pos.x - d.x1, vy = pos.y - d.y1;
     const len = Math.max(px(10), Math.hypot(vx, vy));
-    d.sz = Math.max(px(20), Math.min(Math.max(canvas.width, canvas.height), len / (EMOJI_HANDLE * Math.SQRT2)));
-    d.rot = Math.atan2(vy, vx) + Math.PI / 4;
+    const u = objUnit(d);   // 핸들은 상자의 오른쪽 위 모서리 (a, -b)
+    d.sz = Math.max(px(d.type === 'text' ? 10 : 20), Math.min(Math.max(canvas.width, canvas.height), len / Math.hypot(u.a, u.b)));
+    d.rot = Math.atan2(vy, vx) - Math.atan2(-u.b, u.a);
   } else if (dr.mode === 'create') {
     const end = !isShape(d) ? snapAxis(d.x1, d.y1, clampX(pos.x), clampY(pos.y)) : { x: clampX(pos.x), y: clampY(pos.y) };
     d.x2 = end.x; d.y2 = end.y;
@@ -1487,12 +1550,12 @@ const dimBar = document.getElementById('dimBar');
 function showDimBar(d) {
   dimBar.classList.add('show');
   const eb = document.getElementById('dimEdit');
-  const isEm = d.type === 'emoji';
-  eb.style.display = (isShape(d) || isEm) ? 'none' : '';
+  const isEm = isSzObj(d);
+  eb.style.display = (isShape(d) || d.type === 'emoji') ? 'none' : '';
   document.getElementById('grpLen').style.display = isEm ? 'none' : '';
   document.getElementById('grpSize').style.display = isEm ? 'none' : '';
   document.getElementById('grpEmoji').style.display = isEm ? '' : 'none';
-  eb.textContent = d.type === 'dim' ? '✏️ 치수값' : '✏️ 문자';
+  eb.textContent = d.type === 'dim' ? '✏️ 치수값' : (d.type === 'text' ? '✏️ 글자' : '✏️ 문자');
   document.getElementById('dimLenLabel').textContent = isShape(d) ? '도형 크기' : '선 길이';
   // 선택한 치수선이 화면 아래쪽이면 바를 위로 올려 가리지 않게 한다
   dimBar.classList.toggle('top', ((d.y1 + d.y2) / 2) > canvas.height * 0.5);
@@ -1562,7 +1625,7 @@ holdRepeat(document.getElementById('dimSizePlus'), d => scaleDimSize(d, 1.14));
 
 // 이모티콘: 크기 ±, 회전 ±5도 (꾹 누르면 반복)
 function scaleEmoji(d, k) {
-  d.sz = Math.max(px(20), Math.min(Math.max(canvas.width, canvas.height), d.sz * k));
+  d.sz = Math.max(px(d.type === 'text' ? 10 : 20), Math.min(Math.max(canvas.width, canvas.height), d.sz * k));
   renderDims();
 }
 function rotateEmoji(d, deg) {
@@ -1584,6 +1647,14 @@ document.getElementById('btnSnap').addEventListener('click', e => {
 document.getElementById('dimEdit').addEventListener('click', () => {
   const d = getSelectedDim();
   if (!d) return;
+  if (d.type === 'text') {
+    editingText = d;
+    pendingTextPos = null;
+    popupMode = 'text';
+    hideDimBar();
+    showTextPopup(canvasToClient(d.x1, d.y1));
+    return;
+  }
   activeDim = d;
   activeDimIsNew = false;
   popupMode = 'dimension';
@@ -1666,6 +1737,7 @@ const dimUnit = document.getElementById('dimUnit');
 const dimName = document.getElementById('dimName');
 const textPopupTitle = document.getElementById('textPopupTitle');
 let popupMode = 'text';   // 'text' | 'dimension'
+let editingText = null;   // 고치는 중인 글자 객체 (새로 넣는 중이면 null)
 
 function showTextPopup(e, prefill, prefillName) {
   const pt = getClientPoint(e);
@@ -1677,11 +1749,14 @@ function showTextPopup(e, prefill, prefillName) {
   document.getElementById('btnTextCancel').textContent = arrowMode ? '건너뛰기' : '취소';
   textPopupTitle.textContent = arrowMode ? '➡️ 화살표 옆에 넣을 문자를 입력하세요 (비워두거나 건너뛰어도 돼요)'
     : (isDim ? '📐 치수와 문자를 입력하세요 (숫자만 쓰면 선택한 단위가 붙고, 문자는 비워도 돼요)' : '');
+  if (!isDim) textPopupTitle.textContent = editingText ? '🔤 글자를 고치세요' : '🔤 넣을 글자를 입력하세요 (십자 표시 자리에 놓여요)';
+  textPopupTitle.style.display = textPopupTitle.textContent ? 'block' : 'none';
   textInput.placeholder = isDim ? '예: 2400' : '텍스트를 입력하세요...';
   textInput.inputMode = isDim ? 'decimal' : 'text';
   textInput.maxLength = isDim ? 20 : 50;
   textInput.value = '';
   dimName.value = isDim && prefillName ? prefillName : '';
+  if (!isDim && editingText) textInput.value = editingText.text;
   if (isDim && prefill) {
     // 기존 치수값을 고칠 때: "2400mm" 이면 숫자와 단위를 나눠서 채워준다
     const m = /^([0-9]+(?:[.,][0-9]+)?)(mm|cm|m)?$/.exec(prefill);
@@ -1707,6 +1782,7 @@ function showTextPopup(e, prefill, prefillName) {
 function closeTextPopup() {
   textPopup.classList.remove('show', 'dim', 'arrow');
   pendingTextPos = null;
+  editingText = null;
   activeDim = null;
   activeDimIsNew = false;
   popupMode = 'text';
@@ -1725,21 +1801,31 @@ dimName.addEventListener('keydown', e => { if (e.key === 'Enter') confirmText();
 function confirmText() {
   if (popupMode === 'dimension') { confirmDimension(); return; }
   const txt = textInput.value.trim();
+
+  if (editingText) {
+    // 이미 놓은 글자를 고치는 경우
+    const d = editingText;
+    closeTextPopup();
+    if (!txt || txt === d.text) { updateDimUI(); return; }
+    saveHistory(true);
+    d.text = txt;
+    selectedDimId = d.id;
+    updateDimUI();
+    setStatus('글자 수정됨');
+    return;
+  }
+
   if (!txt || !pendingTextPos) { closeTextPopup(); return; }
-  saveHistory();
-  const size = px(fontSizeForText);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.font = `bold ${size}px 'Segoe UI', sans-serif`;
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  // 텍스트 배경
-  const metrics = ctx.measureText(txt);
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(pendingTextPos.x - px(4), pendingTextPos.y - px(2), metrics.width + px(10), size + px(8));
-  ctx.fillStyle = currentColor;
-  ctx.fillText(txt, pendingTextPos.x, pendingTextPos.y);
+  // 새 글자: 십자 표시한 자리에 가운데 맞춰 놓고, 바로 선택 상태로 둔다 (이동·크기·회전 가능)
+  const pos = pendingTextPos;
   closeTextPopup();
-  setStatus('텍스트 추가됨');
+  saveHistory(true);
+  const d = newDim(pos.x, pos.y);
+  d.text = txt;
+  dims.push(d);
+  selectedDimId = d.id;
+  updateDimUI();
+  setStatus('글자 추가됨 - 끌면 이동 / 노란 핸들을 끌면 크기·회전 / ✏️ 글자로 수정');
 }
 
 function confirmDimension() {
