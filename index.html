@@ -177,6 +177,16 @@
     position: relative;
   }
 
+  /* 확대/이동 바 */
+  .zoom-bar { display: flex; align-items: center; gap: 4px; padding: 3px 8px; background: #16213e; border-bottom: 1px solid #0f3460; flex-wrap: nowrap; overflow-x: auto; }
+  .zoom-bar button { min-height: 34px; min-width: 38px; padding: 3px 8px; border: none; border-radius: 8px; background: #0f3460; color: #eee; font-size: 0.85rem; cursor: pointer; white-space: nowrap; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  .zoom-bar button.active { background: #e94560; }
+  .zoom-bar #zoomLabel { min-width: 46px; text-align: center; font-size: 0.8rem; color: #ddd; }
+  .zoom-bar .zoom-hint { font-size: 0.68rem; color: #778; white-space: nowrap; margin-left: auto; }
+  @media (max-width: 600px) { .zoom-bar .zoom-hint { display: none; } }
+  #canvasWrapper { transform-origin: 0 0; }
+  .canvas-container.panning, .canvas-container.panning canvas { cursor: grab; }
+
   /* 캔버스 래퍼: 사진(baseCanvas)과 그림(mainCanvas)을 겹쳐서 표시 */
   #canvasWrapper {
     position: relative;
@@ -336,7 +346,7 @@
 <header>
   <div>
     <h1>📸 포토 마크업</h1>
-    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v15 · 10/31 14:10</span></p>
+    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v16 · 10/31 21:00</span></p>
   </div>
 </header>
 
@@ -441,6 +451,14 @@
     </div>
 
     <!-- 캔버스: baseCanvas(사진) 위에 mainCanvas(그림, 투명)를 겹침 -->
+    <div class="zoom-bar" id="zoomBar">
+      <button id="zoomOut" title="축소">🔍−</button>
+      <span id="zoomLabel">100%</span>
+      <button id="zoomIn" title="확대">🔍+</button>
+      <button id="btnPanMode" title="켜면 손가락 하나로 사진을 밀어서 이동">✋ 이동</button>
+      <button id="zoomReset" title="원래 크기로">⟲ 원래크기</button>
+      <span class="zoom-hint">두 손가락으로 벌리면 확대 · 모으면 축소 · 같이 밀면 이동</span>
+    </div>
     <div class="canvas-container" id="canvasContainer">
       <div id="canvasWrapper">
         <canvas id="baseCanvas"></canvas>
@@ -591,6 +609,7 @@ function fitCanvasDisplay() {
     el.style.width = cssW + 'px';
     el.style.height = cssH + 'px';
   });
+  resetView(true);
   renderDims();   // 핸들 크기는 화면 기준이라 화면 크기가 바뀌면 다시 그린다
 }
 // 모바일 키보드가 올라올 때(높이만 변할 때)는 다시 맞추지 않고, 가로 폭이 바뀔 때(회전 등)만 맞춘다
@@ -883,6 +902,107 @@ canvasContainer.addEventListener('drop', e => {
   if (file && file.type.startsWith('image/')) loadImageFile(file);
 });
 
+// ===== 확대 / 이동 =====
+// 화면 표시용 CSS transform 만 바꾼다. 좌표 계산은 모두 getBoundingClientRect 를 쓰므로 그대로 정확하다.
+// 확대하면 scaleFactor()가 작아져서 핸들·돋보기·새로 넣는 글자/선 굵기는 화면에서 같은 크기로 유지된다 (세밀한 작업용).
+const MAX_ZOOM = 12;
+let view = { z: 1, tx: 0, ty: 0 };
+let panMode = false, gesture = null, gestureMark = null, viewRaf = 0;
+const zoomLabel = document.getElementById('zoomLabel');
+
+function applyView() {
+  canvasWrapper.style.transform = (view.z === 1 && !view.tx && !view.ty) ? '' : `translate(${view.tx}px, ${view.ty}px) scale(${view.z})`;
+  zoomLabel.textContent = Math.round(view.z * 100) + '%';
+  if (!viewRaf) viewRaf = requestAnimationFrame(() => { viewRaf = 0; renderDims(); });
+}
+function clampView() {
+  if (view.z <= 1.001) { view.z = Math.max(1, view.z); if (view.z === 1) { view.tx = 0; view.ty = 0; } return; }
+  const r = canvasWrapper.getBoundingClientRect();
+  const c = canvasContainer.getBoundingClientRect();
+  const keep = 80;
+  if (r.right < c.left + keep) view.tx += c.left + keep - r.right;
+  if (r.left > c.right - keep) view.tx -= r.left - (c.right - keep);
+  if (r.bottom < c.top + keep) view.ty += c.top + keep - r.bottom;
+  if (r.top > c.bottom - keep) view.ty -= r.top - (c.bottom - keep);
+}
+function resetView(noRender) {
+  view = { z: 1, tx: 0, ty: 0 };
+  canvasWrapper.style.transform = '';
+  zoomLabel.textContent = '100%';
+  if (!noRender) applyView();
+}
+// (cx, cy) 화면 좌표의 점이 제자리에 있도록 배율을 바꾼다
+function zoomAt(cx, cy, newZ, dx, dy) {
+  newZ = Math.max(1, Math.min(MAX_ZOOM, newZ));
+  const r = canvasWrapper.getBoundingClientRect();
+  const u = { x: (cx - r.left) / view.z, y: (cy - r.top) / view.z };   // 래퍼 안 위치(배율 1 기준)
+  const newLeft = cx - u.x * newZ + (dx || 0), newTop = cy - u.y * newZ + (dy || 0);
+  view.tx += newLeft - r.left; view.ty += newTop - r.top;
+  view.z = newZ;
+  clampView(); applyView();
+}
+function zoomCenter(factor) {
+  const c = canvasContainer.getBoundingClientRect();
+  zoomAt(c.left + c.width / 2, c.top + c.height / 2, view.z * factor);
+}
+function abortDrawing() {
+  // 두 번째 손가락이 닿으면 첫 손가락으로 시작된 그리기/이동을 취소한다
+  if (isDrawing) {
+    isDrawing = false; dimDrag = null; hideLoupe(); dimBar.classList.remove('dragging');
+    ctx.globalCompositeOperation = 'source-over';
+    if (gestureMark) while (history.length > gestureMark.hist) undo();
+    renderDims();
+  }
+  if (gestureMark && !gestureMark.popup && textPopup.classList.contains('show')) closeTextPopup();
+  gestureMark = null;
+}
+function touchCenter(t) { return { x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 }; }
+function startPinch(e) {
+  abortDrawing();
+  const t = e.touches;
+  const c = touchCenter(t);
+  gesture = { type: 'pinch', d: Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY) || 1, cx: c.x, cy: c.y };
+  canvasContainer.classList.add('panning');
+}
+function startPan1(e) {
+  const t = e.touches[0];
+  gesture = { type: 'pan', cx: t.clientX, cy: t.clientY };
+}
+function updateGesture(e) {
+  const t = e.touches;
+  if (gesture.type === 'pinch' && t.length >= 2) {
+    const c = touchCenter(t);
+    const d = Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY) || 1;
+    zoomAt(c.x, c.y, view.z * d / gesture.d, c.x - gesture.cx, c.y - gesture.cy);
+    gesture.d = d; gesture.cx = c.x; gesture.cy = c.y;
+  } else if (gesture.type === 'pan' && t.length >= 1) {
+    view.tx += t[0].clientX - gesture.cx; view.ty += t[0].clientY - gesture.cy;
+    gesture.cx = t[0].clientX; gesture.cy = t[0].clientY;
+    clampView(); applyView();
+  }
+}
+function endGesture() { gesture = null; if (!panMode) canvasContainer.classList.remove('panning'); }
+function startMousePan(e) {
+  let lx = e.clientX, ly = e.clientY;
+  const mv = ev => { view.tx += ev.clientX - lx; view.ty += ev.clientY - ly; lx = ev.clientX; ly = ev.clientY; clampView(); applyView(); };
+  const up = () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up); };
+  window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up);
+}
+canvasContainer.addEventListener('wheel', e => {
+  if (!baseImage) return;
+  e.preventDefault();
+  zoomAt(e.clientX, e.clientY, view.z * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+}, { passive: false });
+document.getElementById('zoomIn').addEventListener('click', () => zoomCenter(1.5));
+document.getElementById('zoomOut').addEventListener('click', () => zoomCenter(1 / 1.5));
+document.getElementById('zoomReset').addEventListener('click', () => resetView());
+document.getElementById('btnPanMode').addEventListener('click', () => {
+  panMode = !panMode;
+  document.getElementById('btnPanMode').classList.toggle('active', panMode);
+  canvasContainer.classList.toggle('panning', panMode);
+  setStatus(panMode ? '✋ 이동 모드: 손가락 하나로 사진을 밀어서 이동 (다시 누르면 그리기로 돌아가요)' : '그리기 모드');
+});
+
 // 캔버스 좌표 변환
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
@@ -894,16 +1014,29 @@ function getPos(e) {
 }
 
 // 그리기 시작
-canvas.addEventListener('mousedown', onDown);
-canvas.addEventListener('touchstart', e => { e.preventDefault(); onDown(e); }, { passive: false });
+canvas.addEventListener('mousedown', e => { if (panMode) { startMousePan(e); return; } onDown(e); });
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (e.touches.length >= 2) { startPinch(e); return; }
+  if (gesture) return;
+  if (panMode) { startPan1(e); return; }
+  const wasPopup = textPopup.classList.contains('show');
+  gestureMark = { hist: history.length, popup: wasPopup };
+  onDown(e);
+}, { passive: false });
 
-canvas.addEventListener('mousemove', onMove);
-canvas.addEventListener('touchmove', e => { e.preventDefault(); onMove(e); }, { passive: false });
+canvas.addEventListener('mousemove', e => { if (!panMode) onMove(e); });
+canvas.addEventListener('touchmove', e => { e.preventDefault(); if (gesture) { updateGesture(e); return; } onMove(e); }, { passive: false });
 
-canvas.addEventListener('mouseup', onUp);
+canvas.addEventListener('mouseup', e => { if (!panMode) onUp(e); });
 // 캔버스 밖에서 마우스를 놓아도 그리기가 끝나도록 window 에도 등록 (onUp 이 중복 호출을 막아준다)
-window.addEventListener('mouseup', onUp);
-canvas.addEventListener('touchend', e => { e.preventDefault(); onUp(e); }, { passive: false });
+window.addEventListener('mouseup', e => { if (!panMode) onUp(e); });
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (gesture) { if (e.touches.length === 0 || (gesture.type === 'pinch' && e.touches.length < 2)) endGesture(); else if (gesture.type === 'pinch') startPinch(e); return; }
+  onUp(e);
+}, { passive: false });
+canvas.addEventListener('touchcancel', e => { if (gesture) endGesture(); }, { passive: false });
 
 function onDown(e) {
   if (!baseImage) return;
