@@ -8,9 +8,10 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; }
+  body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 
   header {
+    flex: none;
     background: linear-gradient(135deg, #16213e, #0f3460);
     padding: 12px 20px;
     display: flex; align-items: center; justify-content: space-between;
@@ -20,7 +21,7 @@
   header p { font-size: 0.75rem; color: #aaa; }
 
   .main-layout {
-    display: flex; height: calc(100vh - 60px);
+    display: flex; flex: 1; min-height: 0;
   }
 
   /* 사이드바 */
@@ -115,17 +116,21 @@
   .emoji-palette {
     display: none; position: absolute; z-index: 100;
     background: #16213e; border: 1px solid #0f3460;
-    border-radius: 10px; padding: 10px;
+    border-radius: 10px; padding: 8px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-    display: none; flex-wrap: wrap; gap: 4px;
-    max-width: 260px;
+    flex-wrap: wrap; gap: 2px; align-content: flex-start;
+    width: min(92vw, 360px); max-height: 50vh; overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
   .emoji-palette.show { display: flex; }
+  .emoji-cat { width: 100%; font-size: 0.72rem; color: #8fa3c8; margin: 6px 2px 0; }
+  .emoji-cat:first-child { margin-top: 0; }
   .emoji-item {
-    font-size: 1.4rem; cursor: pointer; padding: 4px;
-    border-radius: 4px; transition: background 0.15s;
+    width: 42px; height: 42px; display: flex; align-items: center; justify-content: center;
+    font-size: 1.5rem; cursor: pointer; border-radius: 6px; transition: background 0.15s;
+    user-select: none; -webkit-user-select: none;
   }
-  .emoji-item:hover { background: #0f3460; }
+  .emoji-item:hover, .emoji-item:active { background: #0f3460; }
 
   /* 텍스트 입력 팝업 */
   .text-popup {
@@ -149,6 +154,13 @@
     border-radius: 6px; padding: 0 6px; font-size: 16px; outline: none;
   }
   .text-popup.dim select { display: block; }
+  .text-popup #dimName {
+    display: none; width: 100%; margin-bottom: 8px;
+    background: #0f3460; border: 1px solid #555; color: #eee; border-radius: 6px;
+    padding: 6px 8px; font-size: 16px; outline: none;
+  }
+  .text-popup.dim #dimName { display: block; }
+  .text-popup.arrow .text-row { display: none; }
   .text-popup-btns { display: flex; gap: 6px; }
   .text-popup-btns button {
     flex: 1; padding: 6px; border: none; border-radius: 6px;
@@ -210,7 +222,7 @@
   .dim-bar .danger { background: #7a1f2e; }
   .dim-bar .ok { background: #1a6b3c; }
   .dim-bar .grp { display: flex; align-items: center; gap: 4px; }
-  .dim-bar .grp-label { font-size: 0.7rem; color: #aaa; }
+  .dim-bar .grp-label { font-size: 0.7rem; color: #aaa; white-space: nowrap; }
 
   /* 확대경 */
   #loupe {
@@ -285,8 +297,19 @@
       width: 100%; min-width: 0; z-index: 300;
     }
     .mobile-only { display: inline-block; }
+    /* 폰에서는 버튼이 한 줄로 길게 늘어나 화면 밖으로 잘리므로 줄바꿈 한다 */
+    .tool-group { flex-wrap: wrap; padding: 0 2px; border-right: none; max-width: 100%; }
+    .toolbar { padding: 6px 8px; }
     .toolbar { gap: 4px; }
     .tool-btn { padding: 5px 7px; font-size: 0.85rem; }
+    /* 폰: 그리기 도구는 아이콘만 보여줘서 한 화면에 다 들어오게 하고, 그래도 넘치면 툴바 안에서 스크롤 */
+    .tools .tool-btn .lbl { display: none; }
+    .tools .tool-btn { min-width: 44px; min-height: 44px; padding: 6px 8px; font-size: 1.15rem; }
+    .tools #btnSnap { font-size: 0.8rem; padding: 6px 8px; }
+    .toolbar { max-height: 48vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    header { padding: 8px 12px; }
+    header h1 { font-size: 1.05rem; }
+    header p { font-size: 0.65rem; }
   }
 </style>
 </head>
@@ -295,7 +318,7 @@
 <header>
   <div>
     <h1>📸 포토 마크업</h1>
-    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v5 · 10/29 21:55</span></p>
+    <p>사진 위에 선·이모티콘·텍스트를 추가하세요 <span id="buildTag" style="color:#e94560;margin-left:6px">v11 · 10/31 11:40</span></p>
   </div>
 </header>
 
@@ -328,16 +351,17 @@
       </div>
 
       <!-- 도구 선택 -->
-      <div class="tool-group">
-        <button class="tool-btn active" id="btnPen" title="펜">✏️ 펜</button>
-        <button class="tool-btn" id="btnLine" title="직선">📏 선</button>
-        <button class="tool-btn" id="btnArrow" title="화살표">➡️ 화살</button>
-        <button class="tool-btn" id="btnDim" title="치수선 (양쪽 화살표 + 치수 입력)">📐 치수</button>
-        <button class="tool-btn" id="btnRect" title="사각형">⬜ 사각</button>
-        <button class="tool-btn" id="btnCircle" title="원">⭕ 원</button>
-        <button class="tool-btn" id="btnText" title="텍스트">🔤 텍스트</button>
-        <button class="tool-btn" id="btnEmoji" title="이모티콘">😊 이모티콘</button>
-        <button class="tool-btn" id="btnEraser" title="지우개">🧹 지우개</button>
+      <div class="tool-group tools">
+        <button class="tool-btn active" id="btnPen" title="펜">✏️<span class="lbl"> 펜</span></button>
+        <button class="tool-btn" id="btnLine" title="선">📏<span class="lbl"> 선</span></button>
+        <button class="tool-btn" id="btnArrow" title="화살표">➡️<span class="lbl"> 화살</span></button>
+        <button class="tool-btn" id="btnDim" title="치수선 (양쪽 화살표 + 치수 입력)">📐<span class="lbl"> 치수</span></button>
+        <button class="tool-btn" id="btnSnap" title="켜면 거의 수평/수직인 치수선을 정확히 맞춰줍니다">🧲 맞춤 꺼짐</button>
+        <button class="tool-btn" id="btnRect" title="사각형">⬜<span class="lbl"> 사각</span></button>
+        <button class="tool-btn" id="btnCircle" title="원">⭕<span class="lbl"> 원</span></button>
+        <button class="tool-btn" id="btnText" title="텍스트">🔤<span class="lbl"> 텍스트</span></button>
+        <button class="tool-btn" id="btnEmoji" title="이모티콘">😊<span class="lbl"> 이모티콘</span></button>
+        <button class="tool-btn" id="btnEraser" title="지우개">🧹<span class="lbl"> 지우개</span></button>
       </div>
 
       <!-- 색상 -->
@@ -365,12 +389,12 @@
       </div>
 
       <!-- 액션 -->
-      <div class="tool-group">
-        <button class="tool-btn" id="btnUndo" title="실행취소 (Ctrl+Z)">↩️ 취소</button>
-        <button class="tool-btn" id="btnClear" title="전체지우기" style="color:#e94560">🗑️ 초기화</button>
-        <button class="tool-btn green" id="btnSave" title="저장">💾 저장</button>
-        <button class="tool-btn action" id="btnShare" title="공유">📤 공유</button>
-        <button class="tool-btn mobile-only" id="btnList" title="앱에 저장된 목록 보기">🗂️ 목록</button>
+      <div class="tool-group tools">
+        <button class="tool-btn" id="btnUndo" title="실행취소 (Ctrl+Z)">↩️<span class="lbl"> 취소</span></button>
+        <button class="tool-btn" id="btnClear" title="전체지우기" style="color:#e94560">🗑️<span class="lbl"> 초기화</span></button>
+        <button class="tool-btn green" id="btnSave" title="저장">💾<span class="lbl"> 저장</span></button>
+        <button class="tool-btn action" id="btnShare" title="공유">📤<span class="lbl"> 공유</span></button>
+        <button class="tool-btn mobile-only" id="btnList" title="앱에 저장된 목록 보기">🗂️<span class="lbl"> 목록</span></button>
       </div>
     </div>
 
@@ -391,6 +415,7 @@
           <option value="">단위없음</option>
         </select>
       </div>
+      <input type="text" id="dimName" placeholder="문자 (선택) 예: 가로, W, 폭, 높이" maxlength="20">
       <div class="text-popup-btns">
         <button class="btn-confirm" id="btnTextConfirm">추가</button>
         <button class="btn-cancel-text" id="btnTextCancel">취소</button>
@@ -408,8 +433,9 @@
       <!-- 치수선 편집 바 (치수선을 선택하면 나타남) -->
       <div class="dim-bar" id="dimBar">
         <button id="dimEdit">✏️ 치수값</button>
-        <div class="grp"><span class="grp-label">선 길이</span><button id="dimLenMinus">−</button><button id="dimLenPlus">+</button></div>
-        <div class="grp"><span class="grp-label">굵기·글자</span><button id="dimSizeMinus">−</button><button id="dimSizePlus">+</button></div>
+        <div class="grp" id="grpLen"><span class="grp-label" id="dimLenLabel">선 길이</span><button id="dimLenMinus">−</button><button id="dimLenPlus">+</button></div>
+        <div class="grp" id="grpSize"><span class="grp-label">굵기·글자</span><button id="dimSizeMinus">−</button><button id="dimSizePlus">+</button></div>
+        <div class="grp" id="grpEmoji" style="display:none"><span class="grp-label">크기</span><button id="emSizeMinus">−</button><button id="emSizePlus">+</button><span class="grp-label">회전</span><button id="emRotMinus">↺</button><button id="emRotPlus">↻</button></div>
         <button id="dimDelete" class="danger">🗑️ 삭제</button>
         <button id="dimDone" class="ok">✔ 완료</button>
       </div>
@@ -483,11 +509,13 @@ try {
 }
 
 // 이모티콘 목록
-const EMOJIS = [
-  '👆','👇','👈','👉','⭐','❗','❓','✅','❌','🔴','🟡','🟢','🔵',
-  '🔺','🔻','💡','🔍','📌','📍','⚠️','🚧','💬','💭','🗯️',
-  '😊','😢','😡','😮','👍','👎','🙏','💪','🎯','🏆','✨','🔥',
-  '📷','🖊️','📋','🔧','⚙️','🔨','📦','🚀','💻','📱','🖥️'
+const EMOJI_GROUPS = [
+  ['표시·화살표', ['👆','👇','👈','👉','☝️','⬆️','⬇️','⬅️','➡️','↗️','↘️','↙️','↖️','↔️','↕️','🔄','⭐','🌟','❗','❓','‼️','⁉️','✅','❌','⭕','✔️','✖️','➕','➖','🔴','🟠','🟡','🟢','🔵','🟣','⚫','⚪','🔺','🔻','🔶','🔷','⚠️','🚫','⛔','🆗','🆕','🔝']],
+  ['번호·기호', ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','#️⃣','💯','🅰️','🅱️','🔔','🔕','📍','📌','📎','🔖','🏷️','💲','💰','🔒','🔓','🔑']],
+  ['공사·설치·도구', ['🔧','🔨','⚙️','🛠️','🧰','📏','📐','🔩','⛏️','🧱','🚧','🏗️','🚪','🛏️','🛋️','🚿','🛁','🚽','🚰','💧','🔥','⚡','🔌','💡','❄️','🌡️','📦','🧹','🧽','🧯','🔦','🔍','🔎','🧲','🪑','🧴']],
+  ['표정·사람', ['😊','😀','😁','😂','😉','😍','😎','🤔','😮','😲','😢','😭','😡','😱','🥶','🥵','😴','🤦','🙏','🙌','👏','👍','👎','👌','✌️','🤞','💪','👀','👷','🙋','🤷']],
+  ['하트·효과', ['❤️','🧡','💛','💚','💙','💜','🖤','💔','💥','💫','✨','🎉','🏆','🎯','🌈','☀️','🌙','☁️','🌧️','🌳','🌸','🍀']],
+  ['물건·기타', ['📷','📸','🎥','📱','💻','🖥️','⌨️','🖊️','📝','📋','📄','📁','📅','⏰','⌛','🏠','🏢','🚗','🚚','🚀','✈️','🛒','🎁','📢','💬','💭','🗯️','🔗','📶','🔋']]
 ];
 
 // 상태
@@ -504,6 +532,7 @@ let pendingEmojiPos = null;
 let dims = [];
 let selectedDimId = null;
 let dimSeq = 0;
+let snapEnabled = false;   // 수평/수직 자동 맞춤 (기본 꺼짐)
 let fontSizeForText = 24;
 
 // baseCanvas: 사진 전용 레이어 (변하지 않음)
@@ -576,6 +605,7 @@ function getClientPoint(e) {
 
 // 치수선이 거의 수평/수직이면(약 6도 이내) 정확히 수평/수직으로 맞춰준다
 function snapAxis(x1, y1, x2, y2) {
+  if (!snapEnabled) return { x: x2, y: y2 };
   const dx = x2 - x1, dy = y2 - y1;
   if (Math.abs(dy) < Math.abs(dx) * 0.1) return { x: x2, y: y1 };
   if (Math.abs(dx) < Math.abs(dy) * 0.1) return { x: x1, y: y2 };
@@ -621,14 +651,18 @@ function getMergedCanvas() {
 
 // 이모티콘 팔레트 채우기
 const emojiPalette = document.getElementById('emojiPalette');
-EMOJIS.forEach(em => {
-  const span = document.createElement('span');
-  span.className = 'emoji-item';
-  span.textContent = em;
-  span.addEventListener('click', () => {
-    selectEmoji(em);
+EMOJI_GROUPS.forEach(group => {
+  const head = document.createElement('div');
+  head.className = 'emoji-cat';
+  head.textContent = group[0];
+  emojiPalette.appendChild(head);
+  group[1].forEach(em => {
+    const span = document.createElement('span');
+    span.className = 'emoji-item';
+    span.textContent = em;
+    span.addEventListener('click', () => selectEmoji(em));
+    emojiPalette.appendChild(span);
   });
-  emojiPalette.appendChild(span);
 });
 
 // 색상 설정
@@ -669,6 +703,9 @@ function selectTool(tool) {
   canvas.style.cursor = tool === 'eraser' ? 'cell' : (tool === 'text' || tool === 'emoji') ? 'pointer' : 'crosshair';
   emojiPalette.classList.remove('show');
   if (tool === 'dimension') setStatus('드래그=새 치수선 / 끝점·선·글자를 잡고 움직이면 수정');
+  else if (tool === 'arrow' || tool === 'line') setStatus('드래그=새 ' + (tool === 'arrow' ? '화살표' : '선') + ' / 끝점·몸통을 잡고 움직이면 수정');
+  else if (tool === 'rect' || tool === 'circle') setStatus('드래그=새 도형 / 테두리·모서리를 잡으면 이동·크기 조절');
+  else setStatus(({ pen: '✏️ 펜', text: '🔤 텍스트 - 사진을 탭하면 글자 입력', eraser: '🧹 지우개' })[tool] || tool);
   updateDimUI();
 }
 
@@ -681,9 +718,11 @@ Object.keys(toolBtns).forEach(k => {
       } else {
         const rect = toolBtns[k].getBoundingClientRect();
         emojiPalette.style.position = 'fixed';
-        emojiPalette.style.top = (rect.bottom + 4) + 'px';
-        emojiPalette.style.left = (rect.left) + 'px';
+        const palTop = rect.bottom + 4;
+        emojiPalette.style.top = palTop + 'px';
+        emojiPalette.style.maxHeight = Math.max(160, window.innerHeight - palTop - 12) + 'px';
         emojiPalette.classList.add('show');
+        emojiPalette.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - emojiPalette.offsetWidth - 8)) + 'px';
         currentTool = 'emoji';
         updateDimUI();
         Object.keys(toolBtns).forEach(t => toolBtns[t].classList.remove('active'));
@@ -701,7 +740,7 @@ let selectedEmoji = '😊';
 function selectEmoji(em) {
   selectedEmoji = em;
   emojiPalette.classList.remove('show');
-  setStatus('캔버스를 클릭하면 이모티콘이 추가됩니다');
+  setStatus('사진을 탭하면 ' + em + ' 이(가) 놓여요 (끌면 이동, 노란 핸들로 크기·회전)');
 }
 
 // 실행 취소 (그림 레이어의 직전 상태로 정확히 1단계만 되돌림)
@@ -860,7 +899,7 @@ function onDown(e) {
   const pos = getPos(e);
   startX = pos.x; startY = pos.y;
 
-  if (currentTool === 'dimension') { onDimDown(e, pos); return; }
+  if (isObjTool()) { onDimDown(e, pos); return; }
 
   if (currentTool === 'text') {
     pendingTextPos = pos;
@@ -895,7 +934,7 @@ function onMove(e) {
   if (!isDrawing) return;
   const pos = getPos(e);
 
-  if (currentTool === 'dimension') { onDimMove(e, pos); return; }
+  if (isObjTool()) { onDimMove(e, pos); return; }
 
   if (currentTool === 'pen' || currentTool === 'eraser') {
     ctx.lineTo(pos.x, pos.y);
@@ -915,7 +954,7 @@ function onUp(e) {
   isDrawing = false;
   ctx.globalCompositeOperation = 'source-over';
 
-  if (currentTool === 'dimension') { onDimUp(e); return; }
+  if (isObjTool()) { onDimUp(e); return; }
 
   if (currentTool === 'pen' || currentTool === 'eraser') {
     ctx.beginPath();
@@ -991,8 +1030,42 @@ function clampX(v) { return Math.max(0, Math.min(canvas.width, v)); }
 function clampY(v) { return Math.max(0, Math.min(canvas.height, v)); }
 function getSelectedDim() { return dims.find(d => d.id === selectedDimId) || null; }
 
+// 편집 가능한 객체 도구: 치수선(dim), 사각형(rect), 원(circle)
+function isObjTool() {
+  return currentTool === 'dimension' || currentTool === 'rect' || currentTool === 'circle' || currentTool === 'arrow' || currentTool === 'line' || currentTool === 'emoji';
+}
+function toolObjType() {
+  return currentTool === 'dimension' ? 'dim' : currentTool;
+}
+function isShape(d) { return d.type === 'rect' || d.type === 'circle'; }
+
 function newDim(x, y) {
-  return { id: ++dimSeq, x1: x, y1: y, x2: x, y2: y, label: '', color: currentColor, cs: currentSize, f: scaleFactor(), k: 1 };
+  const d = { id: ++dimSeq, type: toolObjType(), x1: x, y1: y, x2: x, y2: y, label: '', color: currentColor, cs: currentSize, f: scaleFactor(), k: 1 };
+  if (d.type === 'emoji') {
+    d.emoji = selectedEmoji;
+    d.sz = px(Math.max(56, currentSize * 8));   // 이모티콘 한 변 크기 (캔버스 px)
+    d.rot = 0;                                   // 회전 각도 (라디안)
+  }
+  return d;
+}
+
+// 이모티콘의 크기·회전 핸들 위치: 오른쪽 위 모서리 바깥쪽
+const EMOJI_HANDLE = 0.6;
+function emojiHandlePos(d) {
+  const a = EMOJI_HANDLE * d.sz, b = -EMOJI_HANDLE * d.sz;
+  return { x: d.x1 + a * Math.cos(d.rot) - b * Math.sin(d.rot), y: d.y1 + a * Math.sin(d.rot) + b * Math.cos(d.rot) };
+}
+function drawEmojiObject(c, d) {
+  c.save();
+  c.globalCompositeOperation = 'source-over';
+  c.translate(d.x1, d.y1);
+  c.rotate(d.rot);
+  c.font = `${d.sz}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillStyle = '#000';
+  c.fillText(d.emoji, 0, 0);
+  c.restore();
 }
 
 function dimStyle(d) {
@@ -1019,6 +1092,11 @@ function dimLabelGeom(d, st) {
   return { a: a, mx: mx, my: my, pad: pad, cy: cy, lx: mx - cy * Math.sin(a), ly: my + cy * Math.cos(a) };
 }
 
+// 치수선에 표시되는 글자: 문자(가로, W 등) + 치수값(2400mm)
+function dimText(d) {
+  return [d.name, d.label].filter(Boolean).join(' ');
+}
+
 function fillArrowHeadOn(c, x, y, dir, size) {
   c.beginPath();
   c.moveTo(x, y);
@@ -1029,7 +1107,70 @@ function fillArrowHeadOn(c, x, y, dir, size) {
 }
 
 // 치수선 하나를 그린다: 본선 + 양쪽 끝 화살촉 + 양쪽 끝 수직 보조선 + 치수 글자
+function drawShapeObject(c, d) {
+  const st = dimStyle(d);
+  if (Math.abs(d.x2 - d.x1) < 1 && Math.abs(d.y2 - d.y1) < 1) return;
+  c.save();
+  c.globalCompositeOperation = 'source-over';
+  c.strokeStyle = d.color;
+  c.lineWidth = st.lw;
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+  c.beginPath();
+  if (d.type === 'rect') {
+    c.rect(Math.min(d.x1, d.x2), Math.min(d.y1, d.y2), Math.abs(d.x2 - d.x1), Math.abs(d.y2 - d.y1));
+  } else {
+    c.ellipse((d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2, Math.max(0.5, Math.abs(d.x2 - d.x1) / 2), Math.max(0.5, Math.abs(d.y2 - d.y1) / 2), 0, 0, Math.PI * 2);
+  }
+  c.stroke();
+  c.restore();
+}
+
+// 선/화살표 위에 붙는 문자 (선 가운데 위쪽, 선 방향에 맞춰 기울임)
+function drawObjLabel(c, d, st) {
+  const txt = dimText(d);
+  if (!txt) return;
+  const g = dimLabelGeom(d, st);
+  c.save();
+  c.translate(g.mx, g.my);
+  c.rotate(g.a);
+  c.font = `bold ${st.fontPx}px 'Segoe UI', sans-serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  const tw = c.measureText(txt).width;
+  c.fillStyle = 'rgba(0,0,0,0.55)';
+  c.fillRect(-tw / 2 - g.pad, g.cy - st.fontPx / 2 - g.pad, tw + g.pad * 2, st.fontPx + g.pad * 2);
+  c.fillStyle = d.color;
+  c.fillText(txt, 0, g.cy);
+  c.restore();
+}
+
+function drawArrowObject(c, d) {
+  const st = dimStyle(d);
+  if (st.len < 1) return;
+  const angle = Math.atan2(d.y2 - d.y1, d.x2 - d.x1);
+  c.save();
+  c.globalCompositeOperation = 'source-over';
+  c.strokeStyle = d.color;
+  c.fillStyle = d.color;
+  c.lineWidth = st.lw;
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+  // 화살촉 안쪽까지만 선을 그려 촉 끝이 뭉툭해지지 않게 한다
+  const inset = d.type === 'arrow' ? st.head * 0.6 : 0;
+  c.beginPath();
+  c.moveTo(d.x1, d.y1);
+  c.lineTo(d.x2 - Math.cos(angle) * inset, d.y2 - Math.sin(angle) * inset);
+  c.stroke();
+  if (d.type === 'arrow') fillArrowHeadOn(c, d.x2, d.y2, angle, st.head);
+  c.restore();
+  drawObjLabel(c, d, st);
+}
+
 function drawDimObject(c, d) {
+  if (d.type === 'emoji') { drawEmojiObject(c, d); return; }
+  if (isShape(d)) { drawShapeObject(c, d); return; }
+  if (d.type === 'arrow' || d.type === 'line') { drawArrowObject(c, d); return; }
   const st = dimStyle(d);
   if (st.len < 1) return;
   const angle = Math.atan2(d.y2 - d.y1, d.x2 - d.x1);
@@ -1058,18 +1199,19 @@ function drawDimObject(c, d) {
   c.lineTo(d.x2 + nx * st.tick, d.y2 + ny * st.tick);
   c.stroke();
 
-  if (d.label) {
+  const txt = dimText(d);
+  if (txt) {
     const g = dimLabelGeom(d, st);
     c.translate(g.mx, g.my);
     c.rotate(g.a);
     c.font = `bold ${st.fontPx}px 'Segoe UI', sans-serif`;
     c.textAlign = 'center';
     c.textBaseline = 'middle';
-    const tw = c.measureText(d.label).width;
+    const tw = c.measureText(txt).width;
     c.fillStyle = 'rgba(0,0,0,0.55)';
     c.fillRect(-tw / 2 - g.pad, g.cy - st.fontPx / 2 - g.pad, tw + g.pad * 2, st.fontPx + g.pad * 2);
     c.fillStyle = d.color;
-    c.fillText(d.label, 0, g.cy);
+    c.fillText(txt, 0, g.cy);
   }
   c.restore();
 }
@@ -1077,6 +1219,38 @@ function drawDimObject(c, d) {
 // 선택된 치수선의 끝점 핸들 (화면 표시용, 저장/공유 이미지에는 들어가지 않는다)
 function drawHandles(c, d) {
   const u = scaleFactor();
+  if (d.type === 'emoji') {
+    // 회전한 점선 상자 + 오른쪽 위 핸들 (끌면 크기와 회전이 함께 바뀜)
+    const h = emojiHandlePos(d), r = 16 * u;
+    const half = EMOJI_HANDLE * d.sz;   // 상자 반변 길이 (핸들이 상자의 오른쪽 위 모서리에 오도록)
+    c.save();
+    c.translate(d.x1, d.y1);
+    c.rotate(d.rot);
+    c.setLineDash([8 * u, 6 * u]);
+    c.lineWidth = 2 * u;
+    c.strokeStyle = 'rgba(255,212,0,0.95)';
+    c.strokeRect(-half, -half, half * 2, half * 2);
+    c.restore();
+    c.save();
+    c.beginPath(); c.arc(h.x, h.y, r, 0, Math.PI * 2);
+    c.fillStyle = 'rgba(255,212,0,0.30)'; c.fill();
+    c.lineWidth = 5 * u; c.strokeStyle = 'rgba(0,0,0,0.75)'; c.stroke();
+    c.lineWidth = 2.6 * u; c.strokeStyle = '#ffd400'; c.stroke();
+    // 회전 화살표 모양 (원호 + 화살촉)
+    c.beginPath(); c.arc(h.x, h.y, r * 0.5, Math.PI * 0.2, Math.PI * 1.6);
+    c.lineWidth = 1.8 * u; c.strokeStyle = '#ffffff'; c.stroke();
+    c.restore();
+    return;
+  }
+  if (d.type === 'circle') {
+    // 원은 모서리 핸들이 원 위에 있지 않으므로, 잡을 수 있는 영역을 점선 상자로 보여준다
+    c.save();
+    c.setLineDash([8 * u, 6 * u]);
+    c.lineWidth = 2 * u;
+    c.strokeStyle = 'rgba(255,212,0,0.9)';
+    c.strokeRect(Math.min(d.x1, d.x2), Math.min(d.y1, d.y2), Math.abs(d.x2 - d.x1), Math.abs(d.y2 - d.y1));
+    c.restore();
+  }
   const r = 16 * u;
   c.save();
   [[d.x1, d.y1], [d.x2, d.y2]].forEach(pt => {
@@ -1110,7 +1284,7 @@ function renderDims() {
   dims.forEach(d => drawDimObject(dimCtx, d));
   uiCtx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
   const sel = getSelectedDim();
-  if (sel && currentTool === 'dimension') drawHandles(uiCtx, sel);
+  if (sel && isObjTool()) drawHandles(uiCtx, sel);
 }
 
 // 점 (ax, ay) 에서 선분까지의 거리
@@ -1129,6 +1303,14 @@ function hitTestDim(pos) {
   // 1) 끝점 (선택된 치수선은 반경 30px, 아닌 것은 16px — 화면 기준)
   for (const d of dims) {
     const sel = d.id === selectedDimId;
+    if (d.type === 'emoji') {
+      if (sel) {
+        const h = emojiHandlePos(d);
+        const dist = Math.hypot(pos.x - h.x, pos.y - h.y);
+        if (dist <= px(30) && dist * 0.6 < bestScore) { bestScore = dist * 0.6; best = { dim: d, part: 'ehandle' }; }
+      }
+      continue;
+    }
     const rEnd = px(sel ? 30 : 16);
     [['end1', d.x1, d.y1], ['end2', d.x2, d.y2]].forEach(item => {
       const dist = Math.hypot(pos.x - item[1], pos.y - item[2]);
@@ -1143,11 +1325,31 @@ function hitTestDim(pos) {
   // 2) 선 몸통 또는 치수 글자 -> 통째로 이동
   const hitBody = px(18);
   for (const d of dims) {
+    if (d.type === 'emoji') {
+      // 이모티콘 안쪽 어디를 눌러도 잡힌다
+      const dist = Math.max(0, Math.hypot(pos.x - d.x1, pos.y - d.y1) - d.sz * 0.5);
+      if (dist <= hitBody) {
+        const score = dist * (d.id === selectedDimId ? 0.6 : 1);
+        if (score < bestScore) { bestScore = score; best = { dim: d, part: 'move' }; }
+      }
+      continue;
+    }
     const st = dimStyle(d);
-    let dist = segDist(pos.x, pos.y, d.x1, d.y1, d.x2, d.y2);
-    if (d.label) {
+    let dist;
+    if (d.type === 'rect') {
+      dist = Math.min(
+        segDist(pos.x, pos.y, d.x1, d.y1, d.x2, d.y1), segDist(pos.x, pos.y, d.x2, d.y1, d.x2, d.y2),
+        segDist(pos.x, pos.y, d.x2, d.y2, d.x1, d.y2), segDist(pos.x, pos.y, d.x1, d.y2, d.x1, d.y1));
+    } else if (d.type === 'circle') {
+      const rx = Math.max(1, Math.abs(d.x2 - d.x1) / 2), ry = Math.max(1, Math.abs(d.y2 - d.y1) / 2);
+      const rr = Math.hypot((pos.x - (d.x1 + d.x2) / 2) / rx, (pos.y - (d.y1 + d.y2) / 2) / ry);
+      dist = Math.abs(rr - 1) * Math.min(rx, ry);
+    } else {
+      dist = segDist(pos.x, pos.y, d.x1, d.y1, d.x2, d.y2);
+    }
+    if (!isShape(d) && dimText(d)) {
       const g = dimLabelGeom(d, st);
-      const outside = Math.hypot(pos.x - g.lx, pos.y - g.ly) - (st.fontPx * 0.8 + d.label.length * st.fontPx * 0.3);
+      const outside = Math.hypot(pos.x - g.lx, pos.y - g.ly) - (st.fontPx * 0.8 + dimText(d).length * st.fontPx * 0.3);
       dist = Math.min(dist, Math.max(0, outside));
     }
     if (dist <= hitBody) {
@@ -1176,7 +1378,7 @@ function onDimDown(e, pos) {
     dims.push(d);
     selectedDimId = d.id;
     dimDrag = { mode: 'create', dim: d, sx: pos.x, sy: pos.y, moved: false, orig: null };
-    showLoupe(pos.x, pos.y, pt);
+    if (d.type !== 'emoji') showLoupe(pos.x, pos.y, pt);
   }
   renderDims();
 }
@@ -1189,8 +1391,17 @@ function onDimMove(e, pos) {
   const dx = pos.x - dr.sx, dy = pos.y - dr.sy;
   if (!dr.moved && Math.hypot(dx, dy) > px(4)) dr.moved = true;
 
-  if (dr.mode === 'create') {
-    const end = snapAxis(d.x1, d.y1, clampX(pos.x), clampY(pos.y));
+  if (d.type === 'emoji' && dr.mode === 'create') {
+    // 이모티콘은 놓는 순간부터 손가락을 따라 움직인다
+    d.x1 = d.x2 = clampX(pos.x); d.y1 = d.y2 = clampY(pos.y);
+  } else if (dr.mode === 'ehandle') {
+    // 핸들을 끌면 중심에서 손가락까지의 거리 = 크기, 방향 = 회전
+    const vx = pos.x - d.x1, vy = pos.y - d.y1;
+    const len = Math.max(px(10), Math.hypot(vx, vy));
+    d.sz = Math.max(px(20), Math.min(Math.max(canvas.width, canvas.height), len / (EMOJI_HANDLE * Math.SQRT2)));
+    d.rot = Math.atan2(vy, vx) + Math.PI / 4;
+  } else if (dr.mode === 'create') {
+    const end = !isShape(d) ? snapAxis(d.x1, d.y1, clampX(pos.x), clampY(pos.y)) : { x: clampX(pos.x), y: clampY(pos.y) };
     d.x2 = end.x; d.y2 = end.y;
     showLoupe(d.x2, d.y2, pt);
   } else if (dr.mode === 'end1' || dr.mode === 'end2') {
@@ -1198,7 +1409,7 @@ function onDimMove(e, pos) {
     const first = dr.mode === 'end1';
     const fx = first ? dr.orig.x1 : dr.orig.x2, fy = first ? dr.orig.y1 : dr.orig.y2;
     const ox = first ? d.x2 : d.x1, oy = first ? d.y2 : d.y1;   // 반대쪽(고정된) 끝점
-    const p = snapAxis(ox, oy, clampX(fx + dx), clampY(fy + dy));
+    const p = !isShape(d) ? snapAxis(ox, oy, clampX(fx + dx), clampY(fy + dy)) : { x: clampX(fx + dx), y: clampY(fy + dy) };
     if (first) { d.x1 = p.x; d.y1 = p.y; } else { d.x2 = p.x; d.y2 = p.y; }
     showLoupe(p.x, p.y, pt);
   } else {
@@ -1220,14 +1431,29 @@ function onDimUp(e) {
   if (!dr) return;
   const d = dr.dim;
 
+  if (dr.mode === 'create' && d.type === 'emoji') {
+    updateDimUI();
+    setStatus('이모티콘 추가됨 - 끌면 이동 / 노란 핸들을 끌면 크기·회전 / 아래 버튼으로 미세 조절');
+    return;
+  }
+
   if (dr.mode === 'create') {
     // 너무 짧게 찍었으면 취소 (빈 곳을 톡 누르면 선택 해제 역할)
-    if (Math.hypot(d.x2 - d.x1, d.y2 - d.y1) < px(12)) {
+    const tooSmall = isShape(d)
+      ? Math.max(Math.abs(d.x2 - d.x1), Math.abs(d.y2 - d.y1)) < px(12)
+      : Math.hypot(d.x2 - d.x1, d.y2 - d.y1) < px(12);
+    if (tooSmall) {
       dims = dims.filter(x => x !== d);
       selectedDimId = null;
       history.pop();
-      setStatus('드래그해서 치수선을 그려주세요 (이미 그린 선은 끝점·선을 잡으면 수정돼요)');
+      setStatus(isShape(d) ? '드래그해서 도형을 그려주세요 (이미 그린 도형은 테두리를 잡으면 수정돼요)' : '드래그해서 치수선을 그려주세요 (이미 그린 선은 끝점·선을 잡으면 수정돼요)');
       updateDimUI();
+      return;
+    }
+    if (isShape(d) || d.type === 'line') {
+      // 사각/원/선은 입력이 필요 없으므로 바로 선택 상태로 둔다 (핸들 + 편집 바 표시)
+      updateDimUI();
+      setStatus(d.type === 'line' ? '선 추가됨 - 끝점·선을 잡으면 수정, ✏️ 문자로 글자 추가' : '도형 추가됨 - 테두리를 잡으면 이동, 모서리 핸들을 끌면 크기 조절');
       return;
     }
     activeDim = d;
@@ -1247,6 +1473,14 @@ const dimBar = document.getElementById('dimBar');
 
 function showDimBar(d) {
   dimBar.classList.add('show');
+  const eb = document.getElementById('dimEdit');
+  const isEm = d.type === 'emoji';
+  eb.style.display = (isShape(d) || isEm) ? 'none' : '';
+  document.getElementById('grpLen').style.display = isEm ? 'none' : '';
+  document.getElementById('grpSize').style.display = isEm ? 'none' : '';
+  document.getElementById('grpEmoji').style.display = isEm ? '' : 'none';
+  eb.textContent = d.type === 'dim' ? '✏️ 치수값' : '✏️ 문자';
+  document.getElementById('dimLenLabel').textContent = isShape(d) ? '도형 크기' : '선 길이';
   // 선택한 치수선이 화면 아래쪽이면 바를 위로 올려 가리지 않게 한다
   dimBar.classList.toggle('top', ((d.y1 + d.y2) / 2) > canvas.height * 0.5);
 }
@@ -1255,7 +1489,7 @@ function hideDimBar() { dimBar.classList.remove('show'); }
 function updateDimUI() {
   renderDims();
   const d = getSelectedDim();
-  if (d && currentTool === 'dimension' && !dimDrag && popupMode !== 'dimension') showDimBar(d);
+  if (d && isObjTool() && !dimDrag && popupMode !== 'dimension') showDimBar(d);
   else hideDimBar();
 }
 
@@ -1313,13 +1547,34 @@ holdRepeat(document.getElementById('dimLenPlus'), d => scaleDimLength(d, 1.08));
 holdRepeat(document.getElementById('dimSizeMinus'), d => scaleDimSize(d, 0.88));
 holdRepeat(document.getElementById('dimSizePlus'), d => scaleDimSize(d, 1.14));
 
+// 이모티콘: 크기 ±, 회전 ±5도 (꾹 누르면 반복)
+function scaleEmoji(d, k) {
+  d.sz = Math.max(px(20), Math.min(Math.max(canvas.width, canvas.height), d.sz * k));
+  renderDims();
+}
+function rotateEmoji(d, deg) {
+  d.rot += deg * Math.PI / 180;
+  renderDims();
+}
+holdRepeat(document.getElementById('emSizeMinus'), d => scaleEmoji(d, 0.9));
+holdRepeat(document.getElementById('emSizePlus'), d => scaleEmoji(d, 1.1));
+holdRepeat(document.getElementById('emRotMinus'), d => rotateEmoji(d, -5));
+holdRepeat(document.getElementById('emRotPlus'), d => rotateEmoji(d, 5));
+
+document.getElementById('btnSnap').addEventListener('click', e => {
+  snapEnabled = !snapEnabled;
+  e.currentTarget.classList.toggle('active', snapEnabled);
+  e.currentTarget.textContent = snapEnabled ? '🧲 맞춤 켜짐' : '🧲 맞춤 꺼짐';
+  setStatus(snapEnabled ? '수평/수직에 가까우면 자동으로 맞춰줘요' : '자유롭게 기울여 그릴 수 있어요');
+});
+
 document.getElementById('dimEdit').addEventListener('click', () => {
   const d = getSelectedDim();
   if (!d) return;
   activeDim = d;
   activeDimIsNew = false;
   popupMode = 'dimension';
-  showTextPopup(canvasToClient((d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2), d.label);
+  showTextPopup(canvasToClient((d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2), d.label, d.name);
 });
 document.getElementById('dimDelete').addEventListener('click', deleteSelectedDim);
 document.getElementById('dimDone').addEventListener('click', () => {
@@ -1329,7 +1584,7 @@ document.getElementById('dimDone').addEventListener('click', () => {
 
 // 키보드 Delete/Backspace 로도 선택한 치수선 삭제 (PC)
 document.addEventListener('keydown', e => {
-  if ((e.key === 'Delete' || e.key === 'Backspace') && currentTool === 'dimension' && getSelectedDim()
+  if ((e.key === 'Delete' || e.key === 'Backspace') && isObjTool() && getSelectedDim()
       && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
     e.preventDefault();
     deleteSelectedDim();
@@ -1342,39 +1597,51 @@ const loupeCtx = loupe.getContext('2d');
 const LOUPE_CSS = 120;
 const LOUPE_ZOOM = 3;
 
+function drawLoupeLayer(src, sx, sy, side, S) {
+  // 원본 영역을 캔버스 범위 안으로 잘라서 그린다 (일부 브라우저는 범위를 벗어난 영역에서 오류가 난다)
+  const x0 = Math.max(0, sx), y0 = Math.max(0, sy);
+  const x1 = Math.min(src.width, sx + side), y1 = Math.min(src.height, sy + side);
+  if (x1 <= x0 || y1 <= y0) return;
+  const k = S / side;
+  loupeCtx.drawImage(src, x0, y0, x1 - x0, y1 - y0, (x0 - sx) * k, (y0 - sy) * k, (x1 - x0) * k, (y1 - y0) * k);
+}
+
 function showLoupe(cx, cy, pt) {
-  const S = loupe.width;
-  const srcSide = px(LOUPE_CSS / LOUPE_ZOOM);   // 확대해서 보여줄 원본 영역 (화면 기준 40px)
-  const sx = cx - srcSide / 2, sy = cy - srcSide / 2;
+  try {
+    const S = loupe.width;
+    const srcSide = px(LOUPE_CSS / LOUPE_ZOOM);   // 확대해서 보여줄 원본 영역 (화면 기준 40px)
+    const sx = cx - srcSide / 2, sy = cy - srcSide / 2;
 
-  loupeCtx.save();
-  loupeCtx.fillStyle = '#000';
-  loupeCtx.fillRect(0, 0, S, S);
-  [baseCanvas, canvas, dimCanvas].forEach(src => {
-    loupeCtx.drawImage(src, sx, sy, srcSide, srcSide, 0, 0, S, S);
-  });
-  // 중심 십자선
-  const m = S / 2;
-  loupeCtx.beginPath();
-  loupeCtx.moveTo(m - 30, m); loupeCtx.lineTo(m - 7, m);
-  loupeCtx.moveTo(m + 7, m); loupeCtx.lineTo(m + 30, m);
-  loupeCtx.moveTo(m, m - 30); loupeCtx.lineTo(m, m - 7);
-  loupeCtx.moveTo(m, m + 7); loupeCtx.lineTo(m, m + 30);
-  loupeCtx.lineWidth = 4;
-  loupeCtx.strokeStyle = 'rgba(0,0,0,0.7)';
-  loupeCtx.stroke();
-  loupeCtx.lineWidth = 1.6;
-  loupeCtx.strokeStyle = '#ffffff';
-  loupeCtx.stroke();
-  loupeCtx.restore();
+    loupeCtx.save();
+    loupeCtx.fillStyle = '#000';
+    loupeCtx.fillRect(0, 0, S, S);
+    [baseCanvas, canvas, dimCanvas].forEach(src => drawLoupeLayer(src, sx, sy, srcSide, S));
+    // 중심 십자선
+    const m = S / 2;
+    loupeCtx.beginPath();
+    loupeCtx.moveTo(m - 30, m); loupeCtx.lineTo(m - 7, m);
+    loupeCtx.moveTo(m + 7, m); loupeCtx.lineTo(m + 30, m);
+    loupeCtx.moveTo(m, m - 30); loupeCtx.lineTo(m, m - 7);
+    loupeCtx.moveTo(m, m + 7); loupeCtx.lineTo(m, m + 30);
+    loupeCtx.lineWidth = 4;
+    loupeCtx.strokeStyle = 'rgba(0,0,0,0.7)';
+    loupeCtx.stroke();
+    loupeCtx.lineWidth = 1.6;
+    loupeCtx.strokeStyle = '#ffffff';
+    loupeCtx.stroke();
+    loupeCtx.restore();
 
-  // 손가락에 가리지 않게 위쪽에 띄우고, 위 공간이 없으면 아래쪽에 띄운다
-  const left = Math.max(4, Math.min(window.innerWidth - LOUPE_CSS - 4, pt.clientX - LOUPE_CSS / 2));
-  let top = pt.clientY - LOUPE_CSS - 70;
-  if (top < 4) top = pt.clientY + 70;
-  loupe.style.left = left + 'px';
-  loupe.style.top = top + 'px';
-  loupe.style.display = 'block';
+    // 손가락에 가리지 않게 위쪽에 띄우고, 위 공간이 없으면 아래쪽에 띄운다
+    const left = Math.max(4, Math.min(window.innerWidth - LOUPE_CSS - 4, pt.clientX - LOUPE_CSS / 2));
+    let top = pt.clientY - LOUPE_CSS - 70;
+    if (top < 4) top = pt.clientY + 70;
+    loupe.style.left = left + 'px';
+    loupe.style.top = top + 'px';
+    loupe.style.display = 'block';
+  } catch (err) {
+    // 확대경은 보조 기능이므로 문제가 생겨도 치수선 조작은 계속되게 한다
+    console.warn('확대경 오류:', err);
+  }
 }
 
 function hideLoupe() { loupe.style.display = 'none'; }
@@ -1383,19 +1650,25 @@ function hideLoupe() { loupe.style.display = 'none'; }
 const textPopup = document.getElementById('textPopup');
 const textInput = document.getElementById('textInput');
 const dimUnit = document.getElementById('dimUnit');
+const dimName = document.getElementById('dimName');
 const textPopupTitle = document.getElementById('textPopupTitle');
 let popupMode = 'text';   // 'text' | 'dimension'
 
-function showTextPopup(e, prefill) {
+function showTextPopup(e, prefill, prefillName) {
   const pt = getClientPoint(e);
   const isDim = popupMode === 'dimension';
   if (isDim) hideDimBar();
   textPopup.classList.toggle('dim', isDim);
-  textPopupTitle.textContent = isDim ? '📐 치수를 입력하세요 (숫자만 입력하면 선택한 단위가 붙어요)' : '';
+  const arrowMode = !!(isDim && activeDim && activeDim.type !== 'dim');
+  textPopup.classList.toggle('arrow', arrowMode);
+  document.getElementById('btnTextCancel').textContent = arrowMode ? '건너뛰기' : '취소';
+  textPopupTitle.textContent = arrowMode ? '➡️ 화살표 옆에 넣을 문자를 입력하세요 (비워두거나 건너뛰어도 돼요)'
+    : (isDim ? '📐 치수와 문자를 입력하세요 (숫자만 쓰면 선택한 단위가 붙고, 문자는 비워도 돼요)' : '');
   textInput.placeholder = isDim ? '예: 2400' : '텍스트를 입력하세요...';
   textInput.inputMode = isDim ? 'decimal' : 'text';
   textInput.maxLength = isDim ? 20 : 50;
   textInput.value = '';
+  dimName.value = isDim && prefillName ? prefillName : '';
   if (isDim && prefill) {
     // 기존 치수값을 고칠 때: "2400mm" 이면 숫자와 단위를 나눠서 채워준다
     const m = /^([0-9]+(?:[.,][0-9]+)?)(mm|cm|m)?$/.exec(prefill);
@@ -1412,13 +1685,14 @@ function showTextPopup(e, prefill) {
   textPopup.style.left = left + 'px';
   textPopup.style.top = top + 'px';
 
-  textInput.focus();
+  const focusEl = arrowMode ? dimName : textInput;
+  focusEl.focus();
   // 마우스 클릭 직후에는 브라우저가 포커스를 되돌려 가는 경우가 있어 한 번 더 맞춘다
-  setTimeout(() => textInput.focus(), 50);
+  setTimeout(() => focusEl.focus(), 50);
 }
 
 function closeTextPopup() {
-  textPopup.classList.remove('show', 'dim');
+  textPopup.classList.remove('show', 'dim', 'arrow');
   pendingTextPos = null;
   activeDim = null;
   activeDimIsNew = false;
@@ -1428,11 +1702,12 @@ function closeTextPopup() {
 
 document.getElementById('btnTextConfirm').addEventListener('click', confirmText);
 document.getElementById('btnTextCancel').addEventListener('click', () => {
-  const wasNewDim = popupMode === 'dimension' && activeDimIsNew;
+  const wasNewDim = popupMode === 'dimension' && activeDimIsNew && !!activeDim && activeDim.type === 'dim';
   closeTextPopup();
   if (wasNewDim) undo();   // 새 치수선의 입력을 취소하면 방금 그린 치수선도 함께 지운다
 });
 textInput.addEventListener('keydown', e => { if (e.key === 'Enter') confirmText(); });
+dimName.addEventListener('keydown', e => { if (e.key === 'Enter') confirmText(); });
 
 function confirmText() {
   if (popupMode === 'dimension') { confirmDimension(); return; }
@@ -1459,18 +1734,20 @@ function confirmDimension() {
   const isNew = activeDimIsNew;
   const raw = textInput.value.trim();
   const unit = dimUnit.value;
+  const name = dimName.value.trim();
   closeTextPopup();
   if (!d || !dims.includes(d)) return;
   // 숫자만 입력했으면 선택한 단위를 붙이고, 직접 단위까지 썼으면 그대로 쓴다
   const isNumber = /^[0-9]+([.,][0-9]+)?$/.test(raw);
   const label = raw ? (isNumber ? raw + unit : raw) : '';
   if (!isNew) {
-    if (label === d.label) return;
+    if (label === d.label && name === (d.name || '')) return;
     saveHistory(true);   // 새로 그린 경우는 만들 때 이미 기록했으므로 한 번에 취소된다
   }
   d.label = label;
+  d.name = name;
   updateDimUI();
-  setStatus(label ? '치수 입력됨: ' + label : '치수값 없음');
+  setStatus(dimText(d) ? '치수 입력됨: ' + dimText(d) : '입력값 없음');
 }
 
 // 저장 (사진+그림을 합쳐서 저장)
